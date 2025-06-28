@@ -3,8 +3,8 @@
 ## Vim/NeoVim Feature Differences (Editing)
 
 - **Visual Mode:** Selection of text for copy, cut, paste operations.
-- **Copy/Cut/Paste (Yank/Delete/Put):** `y`, `d`, `p` commands.
-- **Undo/Redo:** `u` and `Ctrl-r` commands.
+
+
 - **Search:** `/` and `?` for searching, `n` and `N` for next/previous match.
 - **Replace:** `:%s/old/new/g` command.
 - **Line Numbers:** Displaying absolute and relative line numbers.
@@ -25,7 +25,7 @@
 - **Text Objects:** `iw`, `aw`, `ip`, `ap`, etc. for selecting logical blocks of text.
 - **Motions:** `w`, `b`, `e`, `ge`, `0`, `^`, `$`, `f`, `t`, `F`, `T`, `%` for efficient cursor movement.
 - **Operators:** `d`, `c`, `y` combined with motions/text objects.
-- **Repeat Last Change:** `.` command.
+
 - **Change Case:** `~`, `gU`, `gu`.
 - **Join Lines:** `J`.
 - **Insert Mode Completion:** `Ctrl-n`, `Ctrl-p`.
