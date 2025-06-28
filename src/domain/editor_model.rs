@@ -156,6 +156,17 @@ impl EditorModel {
     pub fn clear_command_buffer(&mut self) {
         self.command_buffer.clear();
     }
+
+    pub fn insert_line_below(&mut self) {
+        self.lines.insert(self.cursor_y + 1, String::new());
+        self.cursor_y += 1;
+        self.cursor_x = 0;
+    }
+
+    pub fn insert_line_above(&mut self) {
+        self.lines.insert(self.cursor_y, String::new());
+        self.cursor_x = 0;
+    }
 }
 
 #[cfg(test)]
@@ -317,5 +328,31 @@ mod tests {
         editor.move_cursor_for_append_at_line_end();
         assert_eq!(editor.cursor_x, 11);
         assert_eq!(editor.cursor_y, 0);
+    }
+
+    #[test]
+    fn test_insert_line_below() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 0;
+        editor.insert_line_below();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_insert_line_above() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 1;
+        editor.insert_line_above();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
     }
 }

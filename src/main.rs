@@ -84,6 +84,16 @@ fn run() -> io::Result<()> {
                             editor_service.move_cursor(KeyCode::Right);
                             status_message.clear();
                         }
+                        KeyCode::Char('o') => {
+                            editor_service.editor_model.insert_line_below();
+                            editor_service.set_mode(EditorMode::Insert);
+                            status_message = "-- INSERT --".to_string();
+                        }
+                        KeyCode::Char('O') => {
+                            editor_service.editor_model.insert_line_above();
+                            editor_service.set_mode(EditorMode::Insert);
+                            status_message = "-- INSERT --".to_string();
+                        }
                         KeyCode::Char('q') => break,
                         _ => {}
                     },
