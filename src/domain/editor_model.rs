@@ -1,5 +1,3 @@
-
-
 use crossterm::event::KeyCode;
 
 pub struct EditorModel {

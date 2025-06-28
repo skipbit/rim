@@ -1,5 +1,5 @@
-use std::io;
 use std::fs;
+use std::io;
 
 pub trait FileIO {
     fn read_file(&self, path: &str) -> io::Result<String>;
