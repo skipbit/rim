@@ -56,6 +56,22 @@ fn run() -> io::Result<()> {
                             editor_service.set_mode(EditorMode::Command);
                             status_message = ":".to_string();
                         }
+                        KeyCode::Char('h') => {
+                            editor_service.move_cursor(KeyCode::Left);
+                            status_message.clear();
+                        }
+                        KeyCode::Char('j') => {
+                            editor_service.move_cursor(KeyCode::Down);
+                            status_message.clear();
+                        }
+                        KeyCode::Char('k') => {
+                            editor_service.move_cursor(KeyCode::Up);
+                            status_message.clear();
+                        }
+                        KeyCode::Char('l') => {
+                            editor_service.move_cursor(KeyCode::Right);
+                            status_message.clear();
+                        }
                         KeyCode::Char('q') => break,
                         _ => {}
                     },
