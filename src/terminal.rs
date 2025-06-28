@@ -1,10 +1,23 @@
-use std::io::{self, Write};
-use crossterm::{terminal::{Clear, ClearType, size}, cursor, execute, style::{SetBackgroundColor, Color, Print, ResetColor}};
 use super::editor::Editor;
+use crossterm::{
+    cursor, execute,
+    style::{Color, Print, ResetColor, SetBackgroundColor},
+    terminal::{size, Clear, ClearType},
+};
+use std::io::{self, Write};
 
-pub fn draw_editor(stdout: &mut io::Stdout, editor: &Editor, status_message: &str) -> io::Result<()> {
+pub fn draw_editor(
+    stdout: &mut io::Stdout,
+    editor: &Editor,
+    status_message: &str,
+) -> io::Result<()> {
     let (cols, rows) = size()?;
-    execute!(stdout, cursor::Hide, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+    execute!(
+        stdout,
+        cursor::Hide,
+        Clear(ClearType::All),
+        cursor::MoveTo(0, 0)
+    )?;
 
     // Draw text
     for (i, line) in editor.lines.iter().enumerate() {
@@ -16,9 +29,10 @@ pub fn draw_editor(stdout: &mut io::Stdout, editor: &Editor, status_message: &st
     }
 
     // Draw status bar
-    let status_bar = format!(" {}:{} | {} lines | {}", 
-        editor.cursor_y + 1, 
-        editor.cursor_x + 1, 
+    let status_bar = format!(
+        " {}:{} | {} lines | {}",
+        editor.cursor_y + 1,
+        editor.cursor_x + 1,
         editor.lines.len(),
         editor.filepath.as_deref().unwrap_or("[No Name]")
     );
@@ -32,12 +46,20 @@ pub fn draw_editor(stdout: &mut io::Stdout, editor: &Editor, status_message: &st
         ResetColor,
         cursor::MoveTo(0, rows - 1),
         SetBackgroundColor(Color::DarkGrey),
-        Print(format!("{:<width$}", status_message_line, width = cols as usize)),
+        Print(format!(
+            "{:<width$}",
+            status_message_line,
+            width = cols as usize
+        )),
         ResetColor
     )?;
 
     // Move cursor to position
-    execute!(stdout, cursor::MoveTo(editor.cursor_x as u16, editor.cursor_y as u16), cursor::Show)?;
+    execute!(
+        stdout,
+        cursor::MoveTo(editor.cursor_x as u16, editor.cursor_y as u16),
+        cursor::Show
+    )?;
 
     stdout.flush()
 }

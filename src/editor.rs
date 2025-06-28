@@ -1,6 +1,6 @@
+use crossterm::event::KeyCode;
 use std::fs;
 use std::io::{self, Error, ErrorKind};
-use crossterm::event::KeyCode;
 
 pub struct Editor {
     pub lines: Vec<String>,
@@ -20,8 +20,8 @@ impl Editor {
     }
 
     pub fn open(&mut self, filepath: &str) -> io::Result<()> {
-        let content = fs::read_to_string(filepath)
-            .map_err(|e| Error::new(ErrorKind::NotFound, e))?;
+        let content =
+            fs::read_to_string(filepath).map_err(|e| Error::new(ErrorKind::NotFound, e))?;
         self.lines = content.lines().map(|s| s.to_string()).collect();
         self.filepath = Some(filepath.to_string());
         Ok(())
@@ -97,5 +97,81 @@ impl Editor {
             self.cursor_x = self.lines[self.cursor_y].len();
             self.lines[self.cursor_y].push_str(&prev_line);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_move_cursor_up() {
+        let mut editor = Editor::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 1;
+        editor.move_cursor(KeyCode::Up);
+        assert_eq!(editor.cursor_y, 0);
+    }
+
+    #[test]
+    fn test_move_cursor_down() {
+        let mut editor = Editor::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 0;
+        editor.move_cursor(KeyCode::Down);
+        assert_eq!(editor.cursor_y, 1);
+    }
+
+    #[test]
+    fn test_move_cursor_left() {
+        let mut editor = Editor::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_x = 3;
+        editor.move_cursor(KeyCode::Left);
+        assert_eq!(editor.cursor_x, 2);
+    }
+
+    #[test]
+    fn test_move_cursor_right() {
+        let mut editor = Editor::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_x = 0;
+        editor.move_cursor(KeyCode::Right);
+        assert_eq!(editor.cursor_x, 1);
+    }
+
+    #[test]
+    fn test_insert_char() {
+        let mut editor = Editor::new();
+        editor.lines.push("".to_string());
+        editor.insert_char('a');
+        assert_eq!(editor.lines[0], "a");
+        assert_eq!(editor.cursor_x, 1);
+    }
+
+    #[test]
+    fn test_delete_char() {
+        let mut editor = Editor::new();
+        editor.lines.push("abc".to_string());
+        editor.cursor_x = 3;
+        editor.delete_char();
+        assert_eq!(editor.lines[0], "ab");
+        assert_eq!(editor.cursor_x, 2);
+    }
+
+    #[test]
+    fn test_delete_char_at_beginning_of_line() {
+        let mut editor = Editor::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 1;
+        editor.cursor_x = 0;
+        editor.delete_char();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "line1line2");
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 5);
     }
 }
