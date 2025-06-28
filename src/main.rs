@@ -52,6 +52,18 @@ fn run() -> io::Result<()> {
                             editor_service.set_mode(EditorMode::Insert);
                             status_message = "-- INSERT --".to_string();
                         }
+                        KeyCode::Char('a') => {
+                            editor_service.editor_model.move_cursor_for_append();
+                            editor_service.set_mode(EditorMode::Insert);
+                            status_message = "-- INSERT --".to_string();
+                        }
+                        KeyCode::Char('A') => {
+                            editor_service
+                                .editor_model
+                                .move_cursor_for_append_at_line_end();
+                            editor_service.set_mode(EditorMode::Insert);
+                            status_message = "-- INSERT --".to_string();
+                        }
                         KeyCode::Char(':') => {
                             editor_service.set_mode(EditorMode::Command);
                             status_message = ":".to_string();

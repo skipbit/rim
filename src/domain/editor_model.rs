@@ -117,6 +117,25 @@ impl EditorModel {
         self.cursor_x = 0;
     }
 
+    pub fn move_cursor_for_append(&mut self) {
+        if self.cursor_y < self.lines.len() {
+            let line_len = self.lines[self.cursor_y].len();
+            if self.cursor_x < line_len {
+                self.cursor_x += 1;
+            } else if self.cursor_y < self.lines.len().saturating_sub(1) {
+                // If at end of line, move to next line and beginning
+                self.cursor_y += 1;
+                self.cursor_x = 0;
+            }
+        }
+    }
+
+    pub fn move_cursor_for_append_at_line_end(&mut self) {
+        if self.cursor_y < self.lines.len() {
+            self.cursor_x = self.lines[self.cursor_y].len();
+        }
+    }
+
     pub fn set_mode(&mut self, mode: EditorMode) {
         self.mode = mode;
     }
@@ -254,5 +273,49 @@ mod tests {
         assert_eq!(editor.lines[1], "");
         assert_eq!(editor.cursor_y, 1);
         assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_move_cursor_for_append_middle_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 5;
+        editor.cursor_y = 0;
+        editor.move_cursor_for_append();
+        assert_eq!(editor.cursor_x, 6);
+        assert_eq!(editor.cursor_y, 0);
+    }
+
+    #[test]
+    fn test_move_cursor_for_append_end_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 11;
+        editor.cursor_y = 0;
+        editor.move_cursor_for_append();
+        assert_eq!(editor.cursor_x, 11);
+        assert_eq!(editor.cursor_y, 0);
+    }
+
+    #[test]
+    fn test_move_cursor_for_append_at_line_end_middle_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 5;
+        editor.cursor_y = 0;
+        editor.move_cursor_for_append_at_line_end();
+        assert_eq!(editor.cursor_x, 11);
+        assert_eq!(editor.cursor_y, 0);
+    }
+
+    #[test]
+    fn test_move_cursor_for_append_at_line_end_end_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 11;
+        editor.cursor_y = 0;
+        editor.move_cursor_for_append_at_line_end();
+        assert_eq!(editor.cursor_x, 11);
+        assert_eq!(editor.cursor_y, 0);
     }
 }
