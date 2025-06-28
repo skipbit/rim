@@ -58,15 +58,66 @@ impl<T: FileIO> EditorService<T> {
     }
 
     pub fn set_mode(&mut self, mode: EditorMode) {
-        self.editor_model.set_mode(mode);
+        self.editor_model.mode = mode;
     }
 
     pub fn push_command_char(&mut self, c: char) {
-        self.editor_model.push_command_char(c);
+        self.editor_model.command_buffer.push(c);
     }
 
     pub fn pop_command_char(&mut self) {
-        self.editor_model.pop_command_char();
+        self.editor_model.command_buffer.pop();
+    }
+
+    pub fn clear_command_buffer(&mut self) {
+        self.editor_model.command_buffer.clear();
+    }
+
+    #[allow(dead_code)]
+    pub fn insert_line_below(&mut self) {
+        self.editor_model.insert_line_below();
+    }
+
+    #[allow(dead_code)]
+    pub fn insert_line_above(&mut self) {
+        self.editor_model.insert_line_above();
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_char_under_cursor(&mut self) {
+        self.editor_model.delete_char_under_cursor();
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_current_line(&mut self) {
+        self.editor_model.delete_current_line();
+    }
+
+    pub fn yank_current_line(&mut self) {
+        if self.editor_model.cursor_y < self.editor_model.lines.len() {
+            self.editor_model.yanked_line =
+                Some(self.editor_model.lines[self.editor_model.cursor_y].clone());
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn put_line_below(&mut self) {
+        self.editor_model.put_line_below();
+    }
+
+    #[allow(dead_code)]
+    pub fn undo(&mut self) {
+        self.editor_model.undo();
+    }
+
+    #[allow(dead_code)]
+    pub fn redo(&mut self) {
+        self.editor_model.redo();
+    }
+
+    #[allow(dead_code)]
+    pub fn repeat_last_change(&mut self) {
+        self.editor_model.repeat_last_change();
     }
 
     pub fn handle_command(&mut self, command_str: &str) -> io::Result<HandleCommandResult> {

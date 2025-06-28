@@ -6,6 +6,17 @@ pub enum EditorMode {
     Command,
 }
 
+pub enum LastChange {
+    InsertChar(char),
+    DeleteChar,
+    DeleteCharUnderCursor,
+    InsertNewline,
+    InsertLineBelow,
+    InsertLineAbove,
+    DeleteCurrentLine,
+    PutLineBelow,
+}
+
 pub struct EditorModel {
     pub lines: Vec<String>,
     pub cursor_x: usize,
@@ -16,6 +27,7 @@ pub struct EditorModel {
     pub yanked_line: Option<String>,
     history: Vec<(Vec<String>, usize, usize)>,
     history_index: usize,
+    last_change: Option<LastChange>,
 }
 
 impl EditorModel {
@@ -30,6 +42,7 @@ impl EditorModel {
             yanked_line: None,
             history: Vec::new(),
             history_index: 0,
+            last_change: None,
         }
     }
 
@@ -95,6 +108,8 @@ impl EditorModel {
         }
         self.lines[self.cursor_y].insert(self.cursor_x, c);
         self.cursor_x += 1;
+        self.last_change = Some(LastChange::InsertChar(c));
+        self.save_snapshot();
     }
 
     pub fn delete_char(&mut self) {
@@ -104,11 +119,15 @@ impl EditorModel {
         if self.cursor_x > 0 {
             self.lines[self.cursor_y].remove(self.cursor_x - 1);
             self.cursor_x -= 1;
+            self.last_change = Some(LastChange::DeleteChar);
+            self.save_snapshot();
         } else if self.cursor_y > 0 {
             let prev_line = self.lines.remove(self.cursor_y);
             self.cursor_y -= 1;
             self.cursor_x = self.lines[self.cursor_y].len();
             self.lines[self.cursor_y].push_str(&prev_line);
+            self.last_change = Some(LastChange::DeleteChar);
+            self.save_snapshot();
         }
     }
 
@@ -118,6 +137,8 @@ impl EditorModel {
         }
         if self.cursor_x < self.lines[self.cursor_y].len() {
             self.lines[self.cursor_y].remove(self.cursor_x);
+            self.last_change = Some(LastChange::DeleteCharUnderCursor);
+            self.save_snapshot();
         }
     }
 
@@ -130,57 +151,23 @@ impl EditorModel {
         self.lines.insert(self.cursor_y + 1, remaining_part);
         self.cursor_y += 1;
         self.cursor_x = 0;
-    }
-
-    pub fn move_cursor_for_append(&mut self) {
-        if self.cursor_y < self.lines.len() {
-            let line_len = self.lines[self.cursor_y].len();
-            if self.cursor_x < line_len {
-                self.cursor_x += 1;
-            } else if self.cursor_y < self.lines.len().saturating_sub(1) {
-                // If at end of line, move to next line and beginning
-                self.cursor_y += 1;
-                self.cursor_x = 0;
-            }
-        }
-    }
-
-    pub fn move_cursor_for_append_at_line_end(&mut self) {
-        if self.cursor_y < self.lines.len() {
-            self.cursor_x = self.lines[self.cursor_y].len();
-        }
-    }
-
-    pub fn set_mode(&mut self, mode: EditorMode) {
-        self.mode = mode;
-    }
-
-    #[allow(dead_code)]
-    pub fn get_mode(&self) -> &EditorMode {
-        &self.mode
-    }
-
-    pub fn push_command_char(&mut self, c: char) {
-        self.command_buffer.push(c);
-    }
-
-    pub fn pop_command_char(&mut self) {
-        self.command_buffer.pop();
-    }
-
-    pub fn clear_command_buffer(&mut self) {
-        self.command_buffer.clear();
+        self.last_change = Some(LastChange::InsertNewline);
+        self.save_snapshot();
     }
 
     pub fn insert_line_below(&mut self) {
         self.lines.insert(self.cursor_y + 1, String::new());
         self.cursor_y += 1;
         self.cursor_x = 0;
+        self.last_change = Some(LastChange::InsertLineBelow);
+        self.save_snapshot();
     }
 
     pub fn insert_line_above(&mut self) {
         self.lines.insert(self.cursor_y, String::new());
         self.cursor_x = 0;
+        self.last_change = Some(LastChange::InsertLineAbove);
+        self.save_snapshot();
     }
 
     pub fn delete_current_line(&mut self) {
@@ -193,12 +180,8 @@ impl EditorModel {
                 self.lines.push(String::new());
             }
             self.cursor_x = 0;
-        }
-    }
-
-    pub fn yank_current_line(&mut self) {
-        if self.cursor_y < self.lines.len() {
-            self.yanked_line = Some(self.lines[self.cursor_y].clone());
+            self.last_change = Some(LastChange::DeleteCurrentLine);
+            self.save_snapshot();
         }
     }
 
@@ -207,6 +190,23 @@ impl EditorModel {
             self.lines.insert(self.cursor_y + 1, yanked_line.clone());
             self.cursor_y += 1;
             self.cursor_x = 0;
+            self.last_change = Some(LastChange::PutLineBelow);
+            self.save_snapshot();
+        }
+    }
+
+    pub fn repeat_last_change(&mut self) {
+        if let Some(last_change) = &self.last_change {
+            match last_change {
+                LastChange::InsertChar(c) => self.insert_char(*c),
+                LastChange::DeleteChar => self.delete_char(),
+                LastChange::DeleteCharUnderCursor => self.delete_char_under_cursor(),
+                LastChange::InsertNewline => self.insert_newline(),
+                LastChange::InsertLineBelow => self.insert_line_below(),
+                LastChange::InsertLineAbove => self.insert_line_above(),
+                LastChange::DeleteCurrentLine => self.delete_current_line(),
+                LastChange::PutLineBelow => self.put_line_below(),
+            }
         }
     }
 
@@ -357,50 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_move_cursor_for_append_middle_of_line() {
-        let mut editor = EditorModel::new();
-        editor.lines.push("Hello World".to_string());
-        editor.cursor_x = 5;
-        editor.cursor_y = 0;
-        editor.move_cursor_for_append();
-        assert_eq!(editor.cursor_x, 6);
-        assert_eq!(editor.cursor_y, 0);
-    }
-
-    #[test]
-    fn test_move_cursor_for_append_end_of_line() {
-        let mut editor = EditorModel::new();
-        editor.lines.push("Hello World".to_string());
-        editor.cursor_x = 11;
-        editor.cursor_y = 0;
-        editor.move_cursor_for_append();
-        assert_eq!(editor.cursor_x, 11);
-        assert_eq!(editor.cursor_y, 0);
-    }
-
-    #[test]
-    fn test_move_cursor_for_append_at_line_end_middle_of_line() {
-        let mut editor = EditorModel::new();
-        editor.lines.push("Hello World".to_string());
-        editor.cursor_x = 5;
-        editor.cursor_y = 0;
-        editor.move_cursor_for_append_at_line_end();
-        assert_eq!(editor.cursor_x, 11);
-        assert_eq!(editor.cursor_y, 0);
-    }
-
-    #[test]
-    fn test_move_cursor_for_append_at_line_end_end_of_line() {
-        let mut editor = EditorModel::new();
-        editor.lines.push("Hello World".to_string());
-        editor.cursor_x = 11;
-        editor.cursor_y = 0;
-        editor.move_cursor_for_append_at_line_end();
-        assert_eq!(editor.cursor_x, 11);
-        assert_eq!(editor.cursor_y, 0);
-    }
-
-    #[test]
     fn test_insert_line_below() {
         let mut editor = EditorModel::new();
         editor.lines.push("line1".to_string());
@@ -510,19 +466,6 @@ mod tests {
     }
 
     #[test]
-    fn test_yank_current_line() {
-        let mut editor = EditorModel::new();
-        editor.lines.push("line1".to_string());
-        editor.lines.push("line2".to_string());
-        editor.cursor_y = 0;
-        editor.yank_current_line();
-        assert_eq!(editor.yanked_line, Some("line1".to_string()));
-        editor.cursor_y = 1;
-        editor.yank_current_line();
-        assert_eq!(editor.yanked_line, Some("line2".to_string()));
-    }
-
-    #[test]
     fn test_put_line_below() {
         let mut editor = EditorModel::new();
         editor.lines.push("line1".to_string());
@@ -597,5 +540,98 @@ mod tests {
         assert_eq!(editor.history.len(), 2);
         assert_eq!(editor.history_index, 2);
         assert_eq!(editor.history[1].0, vec!["line1", "line3"]);
+    }
+
+    #[test]
+    fn test_repeat_last_change_insert_char() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("".to_string());
+        editor.insert_char('a');
+        editor.repeat_last_change();
+        assert_eq!(editor.lines[0], "aa");
+        assert_eq!(editor.cursor_x, 2);
+    }
+
+    #[test]
+    fn test_repeat_last_change_delete_char() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("abc".to_string());
+        editor.cursor_x = 3;
+        editor.delete_char();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines[0], "a");
+        assert_eq!(editor.cursor_x, 1);
+    }
+
+    #[test]
+    fn test_repeat_last_change_delete_char_under_cursor() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("abc".to_string());
+        editor.cursor_x = 0;
+        editor.delete_char_under_cursor();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines[0], "c");
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_repeat_last_change_insert_newline() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_x = 5;
+        editor.insert_newline();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[0], "line1");
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.lines[2], "");
+    }
+
+    #[test]
+    fn test_repeat_last_change_insert_line_below() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.insert_line_below();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[0], "line1");
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.lines[2], "");
+    }
+
+    #[test]
+    fn test_repeat_last_change_insert_line_above() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_y = 0;
+        editor.insert_line_above();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[0], "");
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.lines[2], "line1");
+    }
+
+    #[test]
+    fn test_repeat_last_change_delete_current_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.delete_current_line();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "");
+    }
+
+    #[test]
+    fn test_repeat_last_change_put_line_below() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.yanked_line = Some("yanked".to_string());
+        editor.put_line_below();
+        editor.repeat_last_change();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[1], "yanked");
+        assert_eq!(editor.lines[2], "yanked");
     }
 }
