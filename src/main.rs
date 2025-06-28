@@ -58,6 +58,10 @@ fn run() -> io::Result<()> {
                         editor_service.insert_char(c);
                         status_message.clear();
                     }
+                    (KeyCode::Enter, _) => {
+                        editor_service.editor_model.insert_newline();
+                        status_message.clear();
+                    }
                     (KeyCode::Backspace, _) => {
                         editor_service.delete_char();
                         status_message.clear();

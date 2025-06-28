@@ -95,6 +95,17 @@ impl EditorModel {
             self.lines[self.cursor_y].push_str(&prev_line);
         }
     }
+
+    pub fn insert_newline(&mut self) {
+        if self.cursor_y >= self.lines.len() {
+            self.lines.push(String::new());
+        }
+        let current_line = &mut self.lines[self.cursor_y];
+        let remaining_part = current_line.split_off(self.cursor_x);
+        self.lines.insert(self.cursor_y + 1, remaining_part);
+        self.cursor_y += 1;
+        self.cursor_x = 0;
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +181,47 @@ mod tests {
         assert_eq!(editor.lines[0], "line1line2");
         assert_eq!(editor.cursor_y, 0);
         assert_eq!(editor.cursor_x, 5);
+    }
+
+    #[test]
+    fn test_insert_newline_middle_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 5; // カーソルを 'o' と ' ' の間に設定
+        editor.cursor_y = 0;
+        editor.insert_newline();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[0], "Hello");
+        assert_eq!(editor.lines[1], " World");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_insert_newline_end_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("Hello World".to_string());
+        editor.cursor_x = 11; // カーソルを 'd' の後に設定
+        editor.cursor_y = 0;
+        editor.insert_newline();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[0], "Hello World");
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_insert_newline_empty_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("".to_string());
+        editor.cursor_x = 0;
+        editor.cursor_y = 0;
+        editor.insert_newline();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[0], "");
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
     }
 }
