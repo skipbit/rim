@@ -1,15 +1,25 @@
 use crossterm::event::KeyCode;
 
+pub enum EditorMode {
+    Normal,
+    Insert,
+    Command,
+}
+
 pub struct EditorModel {
     pub lines: Vec<String>,
     pub cursor_x: usize,
     pub cursor_y: usize,
     pub filepath: Option<String>,
+    pub mode: EditorMode,
+    pub command_buffer: String,
 }
 
 impl EditorModel {
     pub fn new() -> Self {
         Self {
+            mode: EditorMode::Normal,
+            command_buffer: String::new(),
             lines: Vec::new(),
             cursor_x: 0,
             cursor_y: 0,
@@ -105,6 +115,27 @@ impl EditorModel {
         self.lines.insert(self.cursor_y + 1, remaining_part);
         self.cursor_y += 1;
         self.cursor_x = 0;
+    }
+
+    pub fn set_mode(&mut self, mode: EditorMode) {
+        self.mode = mode;
+    }
+
+    #[allow(dead_code)]
+    pub fn get_mode(&self) -> &EditorMode {
+        &self.mode
+    }
+
+    pub fn push_command_char(&mut self, c: char) {
+        self.command_buffer.push(c);
+    }
+
+    pub fn pop_command_char(&mut self) {
+        self.command_buffer.pop();
+    }
+
+    pub fn clear_command_buffer(&mut self) {
+        self.command_buffer.clear();
     }
 }
 

@@ -1,7 +1,12 @@
-use crate::domain::editor_model::EditorModel;
+use crate::domain::editor_model::{EditorMode, EditorModel};
 use crate::infrastructure::file_io::FileIO;
 use crossterm::event::KeyCode;
 use std::io::{self, Error, ErrorKind};
+
+pub enum HandleCommandResult {
+    Continue,
+    Quit,
+}
 
 pub struct EditorService<T: FileIO> {
     pub editor_model: EditorModel,
@@ -42,6 +47,29 @@ impl<T: FileIO> EditorService<T> {
 
     pub fn delete_char(&mut self) {
         self.editor_model.delete_char();
+    }
+
+    pub fn set_mode(&mut self, mode: EditorMode) {
+        self.editor_model.set_mode(mode);
+    }
+
+    pub fn push_command_char(&mut self, c: char) {
+        self.editor_model.push_command_char(c);
+    }
+
+    pub fn pop_command_char(&mut self) {
+        self.editor_model.pop_command_char();
+    }
+
+    pub fn handle_command(&mut self, command: &str) -> io::Result<HandleCommandResult> {
+        match command {
+            "w" => {
+                self.save_file()?;
+                Ok(HandleCommandResult::Continue)
+            }
+            "q" => Ok(HandleCommandResult::Quit),
+            _ => Err(Error::new(ErrorKind::InvalidInput, "Unknown command")),
+        }
     }
 }
 

@@ -2,12 +2,13 @@ mod application;
 mod domain;
 mod infrastructure;
 
-use application::editor_service::EditorService;
+use application::editor_service::{EditorService, HandleCommandResult};
+use domain::editor_model::EditorMode;
 use infrastructure::file_io::LocalFileIO;
 use infrastructure::terminal_ui;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -45,32 +46,74 @@ fn run() -> io::Result<()> {
 
         if event::poll(Duration::from_millis(500))? {
             if let Event::Key(event) = event::read()? {
-                match (event.code, event.modifiers) {
-                    (KeyCode::Char('q'), KeyModifiers::CONTROL) => break,
-                    (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
-                        if editor_service.save_file().is_ok() {
-                            status_message = "File saved successfully!".to_string();
-                        } else {
-                            status_message = "Error saving file!".to_string();
+                match editor_service.editor_model.mode {
+                    EditorMode::Normal => match event.code {
+                        KeyCode::Char('i') => {
+                            editor_service.set_mode(EditorMode::Insert);
+                            status_message = "-- INSERT --".to_string();
                         }
-                    }
-                    (KeyCode::Char(c), _) => {
-                        editor_service.insert_char(c);
-                        status_message.clear();
-                    }
-                    (KeyCode::Enter, _) => {
-                        editor_service.editor_model.insert_newline();
-                        status_message.clear();
-                    }
-                    (KeyCode::Backspace, _) => {
-                        editor_service.delete_char();
-                        status_message.clear();
-                    }
-                    (KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right, _) => {
-                        editor_service.move_cursor(event.code);
-                        status_message.clear();
-                    }
-                    _ => {}
+                        KeyCode::Char(':') => {
+                            editor_service.set_mode(EditorMode::Command);
+                            status_message = ":".to_string();
+                        }
+                        KeyCode::Char('q') => break,
+                        _ => {}
+                    },
+                    EditorMode::Insert => match event.code {
+                        KeyCode::Esc => {
+                            editor_service.set_mode(EditorMode::Normal);
+                            status_message.clear();
+                        }
+                        KeyCode::Char(c) => {
+                            editor_service.insert_char(c);
+                            status_message.clear();
+                        }
+                        KeyCode::Enter => {
+                            editor_service.editor_model.insert_newline();
+                            status_message.clear();
+                        }
+                        KeyCode::Backspace => {
+                            editor_service.delete_char();
+                            status_message.clear();
+                        }
+                        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+                            editor_service.move_cursor(event.code);
+                            status_message.clear();
+                        }
+                        _ => {}
+                    },
+                    EditorMode::Command => match event.code {
+                        KeyCode::Esc => {
+                            editor_service.set_mode(EditorMode::Normal);
+                            editor_service.editor_model.clear_command_buffer();
+                            status_message.clear();
+                        }
+                        KeyCode::Char(c) => {
+                            editor_service.push_command_char(c);
+                            status_message =
+                                format!(":{}", editor_service.editor_model.command_buffer);
+                        }
+                        KeyCode::Backspace => {
+                            editor_service.pop_command_char();
+                            status_message =
+                                format!(":{}", editor_service.editor_model.command_buffer);
+                        }
+                        KeyCode::Enter => {
+                            let command = editor_service.editor_model.command_buffer.clone();
+                            editor_service.editor_model.clear_command_buffer();
+                            match editor_service.handle_command(&command) {
+                                Ok(HandleCommandResult::Quit) => break,
+                                Ok(HandleCommandResult::Continue) => {
+                                    status_message = format!("Command executed: {}", command);
+                                }
+                                Err(e) => {
+                                    status_message = format!("Error: {}", e);
+                                }
+                            }
+                            editor_service.set_mode(EditorMode::Normal);
+                        }
+                        _ => {}
+                    },
                 }
             }
         }

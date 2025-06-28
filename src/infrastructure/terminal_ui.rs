@@ -1,4 +1,4 @@
-use crate::domain::editor_model::EditorModel;
+use crate::domain::editor_model::{EditorMode, EditorModel};
 use crossterm::{
     cursor, execute,
     style::{Color, Print, ResetColor, SetBackgroundColor},
@@ -29,14 +29,26 @@ pub fn draw_editor(
     }
 
     // Draw status bar
+    let mode_indicator = match editor.mode {
+        EditorMode::Normal => "NORMAL",
+        EditorMode::Insert => "INSERT",
+        EditorMode::Command => "COMMAND",
+    };
+
     let status_bar = format!(
-        " {}:{} | {} lines | {}",
+        " {}:{} | {} lines | {} | {}",
         editor.cursor_y + 1,
         editor.cursor_x + 1,
         editor.lines.len(),
-        editor.filepath.as_deref().unwrap_or("[No Name]")
+        editor.filepath.as_deref().unwrap_or("[No Name]"),
+        mode_indicator
     );
-    let status_message_line = format!(" {}", status_message);
+
+    let status_message_line = if let EditorMode::Command = editor.mode {
+        format!(":{}", editor.command_buffer)
+    } else {
+        format!(" {}", status_message)
+    };
 
     execute!(
         stdout,
