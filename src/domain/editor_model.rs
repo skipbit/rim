@@ -13,6 +13,7 @@ pub struct EditorModel {
     pub filepath: Option<String>,
     pub mode: EditorMode,
     pub command_buffer: String,
+    pub yanked_line: Option<String>,
 }
 
 impl EditorModel {
@@ -24,6 +25,7 @@ impl EditorModel {
             cursor_x: 0,
             cursor_y: 0,
             filepath: None,
+            yanked_line: None,
         }
     }
 
@@ -186,6 +188,20 @@ impl EditorModel {
             if self.lines.is_empty() {
                 self.lines.push(String::new());
             }
+            self.cursor_x = 0;
+        }
+    }
+
+    pub fn yank_current_line(&mut self) {
+        if self.cursor_y < self.lines.len() {
+            self.yanked_line = Some(self.lines[self.cursor_y].clone());
+        }
+    }
+
+    pub fn put_line_below(&mut self) {
+        if let Some(yanked_line) = &self.yanked_line {
+            self.lines.insert(self.cursor_y + 1, yanked_line.clone());
+            self.cursor_y += 1;
             self.cursor_x = 0;
         }
     }
@@ -458,6 +474,46 @@ mod tests {
         assert_eq!(editor.lines.len(), 1);
         assert_eq!(editor.lines[0], "");
         assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_yank_current_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 0;
+        editor.yank_current_line();
+        assert_eq!(editor.yanked_line, Some("line1".to_string()));
+        editor.cursor_y = 1;
+        editor.yank_current_line();
+        assert_eq!(editor.yanked_line, Some("line2".to_string()));
+    }
+
+    #[test]
+    fn test_put_line_below() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 0;
+        editor.yanked_line = Some("yanked_line".to_string());
+        editor.put_line_below();
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.lines[1], "yanked_line");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_put_line_below_empty_yanked_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_y = 0;
+        editor.yanked_line = Some("".to_string());
+        editor.put_line_below();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[1], "");
+        assert_eq!(editor.cursor_y, 1);
         assert_eq!(editor.cursor_x, 0);
     }
 }

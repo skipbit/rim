@@ -36,6 +36,7 @@ fn run() -> io::Result<()> {
     let mut editor_service = EditorService::new(file_io);
     let mut status_message = String::new();
     let mut d_pressed = false;
+    let mut y_pressed = false;
 
     if args.len() > 1 {
         editor_service.open_file(&args[1])?;
@@ -110,9 +111,27 @@ fn run() -> io::Result<()> {
                                 status_message = "d".to_string();
                             }
                         }
+                        KeyCode::Char('y') => {
+                            if y_pressed {
+                                editor_service.editor_model.yank_current_line();
+                                status_message = "yanked current line".to_string();
+                                y_pressed = false;
+                            } else {
+                                y_pressed = true;
+                                status_message = "y".to_string();
+                            }
+                            d_pressed = false;
+                        }
+                        KeyCode::Char('p') => {
+                            editor_service.editor_model.put_line_below();
+                            status_message.clear();
+                            d_pressed = false;
+                            y_pressed = false;
+                        }
                         KeyCode::Char('q') => break,
                         _ => {
                             d_pressed = false;
+                            y_pressed = false;
                         }
                     },
                     EditorMode::Insert => match event.code {
