@@ -3,6 +3,9 @@ use crate::infrastructure::file_io::FileIO;
 use crossterm::event::KeyCode;
 use std::io::{self, Error, ErrorKind};
 
+use crate::application::commands::{EditorCommand, QuitCommand, WriteCommand};
+
+#[derive(Debug)]
 pub enum HandleCommandResult {
     Continue,
     Quit,
@@ -66,17 +69,21 @@ impl<T: FileIO> EditorService<T> {
         self.editor_model.pop_command_char();
     }
 
-    pub fn handle_command(&mut self, command: &str) -> io::Result<HandleCommandResult> {
-        let parts: Vec<&str> = command.splitn(2, ' ').collect();
-        match parts[0] {
-            "w" => {
-                let filepath = parts.get(1).copied();
-                self.save_file(filepath)?;
-                Ok(HandleCommandResult::Continue)
+    pub fn handle_command(&mut self, command_str: &str) -> io::Result<HandleCommandResult> {
+        let parts: Vec<&str> = command_str.splitn(2, ' ').collect();
+        let command_name = parts[0];
+        let arg = parts.get(1).map(|s| s.to_string());
+
+        let commands: Vec<Box<dyn EditorCommand<T>>> =
+            vec![Box::new(WriteCommand::new(arg)), Box::new(QuitCommand)];
+
+        for cmd in commands {
+            if cmd.names().contains(&command_name) {
+                return cmd.execute(self);
             }
-            "q" => Ok(HandleCommandResult::Quit),
-            _ => Err(Error::new(ErrorKind::InvalidInput, "Unknown command")),
         }
+
+        Err(Error::new(ErrorKind::InvalidInput, "Unknown command"))
     }
 }
 
@@ -214,6 +221,53 @@ mod tests {
             editor_service.editor_model.get_filepath(),
             Some(&"new_file.txt".to_string())
         );
+    }
+
+    #[test]
+    fn test_save_new_file_with_long_command() {
+        let mock_file_io = MockFileIO::new();
+        let mut editor_service = EditorService::new(mock_file_io);
+        editor_service.editor_model.set_content("new file content");
+
+        let result = editor_service.handle_command("write new_file_long.txt");
+        assert!(result.is_ok());
+
+        let written = editor_service.file_io.get_written_data();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].0, "new_file_long.txt");
+        assert_eq!(written[0].1, "new file content");
+        assert_eq!(
+            editor_service.editor_model.get_filepath(),
+            Some(&"new_file_long.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_quit_command() {
+        let mock_file_io = MockFileIO::new();
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("q");
+        assert!(matches!(result, Ok(HandleCommandResult::Quit)));
+    }
+
+    #[test]
+    fn test_quit_long_command() {
+        let mock_file_io = MockFileIO::new();
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("quit");
+        assert!(matches!(result, Ok(HandleCommandResult::Quit)));
+    }
+
+    #[test]
+    fn test_unknown_command() {
+        let mock_file_io = MockFileIO::new();
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("unknown");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
     }
 
     #[test]
