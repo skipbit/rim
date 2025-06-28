@@ -1,7 +1,7 @@
 # Gemini Project Context: rim
 
 ## Project Goal
-A minimal, console-based text editor similar to NeoVim, built in Rust.
+A terminal editor built in Rust, aiming to surpass NeoVim with integrated AI Code Assist capabilities.
 
 ## Commands
 - **Build:** `cargo build`
