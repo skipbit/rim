@@ -1,14 +1,10 @@
 mod editor;
 mod terminal;
 
-use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::{event::{self, Event, KeyCode, KeyModifiers}, terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}, execute};
 use editor::Editor;
-use std::env;
 use std::io;
+use std::env;
 use std::time::Duration;
 
 fn main() -> io::Result<()> {
