@@ -94,6 +94,10 @@ fn run() -> io::Result<()> {
                             editor_service.set_mode(EditorMode::Insert);
                             status_message = "-- INSERT --".to_string();
                         }
+                        KeyCode::Char('x') => {
+                            editor_service.editor_model.delete_char_under_cursor();
+                            status_message.clear();
+                        }
                         KeyCode::Char('q') => break,
                         _ => {}
                     },

@@ -106,6 +106,15 @@ impl EditorModel {
         }
     }
 
+    pub fn delete_char_under_cursor(&mut self) {
+        if self.cursor_y >= self.lines.len() {
+            return;
+        }
+        if self.cursor_x < self.lines[self.cursor_y].len() {
+            self.lines[self.cursor_y].remove(self.cursor_x);
+        }
+    }
+
     pub fn insert_newline(&mut self) {
         if self.cursor_y >= self.lines.len() {
             self.lines.push(String::new());
@@ -353,6 +362,36 @@ mod tests {
         assert_eq!(editor.lines.len(), 3);
         assert_eq!(editor.lines[1], "");
         assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_delete_char_under_cursor() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("abc".to_string());
+        editor.cursor_x = 1;
+        editor.delete_char_under_cursor();
+        assert_eq!(editor.lines[0], "ac");
+        assert_eq!(editor.cursor_x, 1);
+    }
+
+    #[test]
+    fn test_delete_char_under_cursor_at_end_of_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("abc".to_string());
+        editor.cursor_x = 2;
+        editor.delete_char_under_cursor();
+        assert_eq!(editor.lines[0], "ab");
+        assert_eq!(editor.cursor_x, 2);
+    }
+
+    #[test]
+    fn test_delete_char_under_cursor_empty_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("".to_string());
+        editor.cursor_x = 0;
+        editor.delete_char_under_cursor();
+        assert_eq!(editor.lines[0], "");
         assert_eq!(editor.cursor_x, 0);
     }
 }
