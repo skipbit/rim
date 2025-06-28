@@ -17,7 +17,18 @@ This is the default mode when you open or switch back to the editor. In Normal M
 -   `k`: Move cursor up
 -   `l`: Move cursor right
 -   Arrow Keys: Move cursor (Left, Down, Up, Right)
--   `i`: Enter **Insert Mode**
+-   `i`: Enter **Insert Mode** (insert at cursor)
+-   `a`: Enter **Insert Mode** (append after cursor)
+-   `A`: Enter **Insert Mode** (append at end of line)
+-   `o`: Insert new line below current and enter **Insert Mode**
+-   `O`: Insert new line above current and enter **Insert Mode**
+-   `x`: Delete character under cursor
+-   `dd`: Delete current line
+-   `yy`: Yank (copy) current line
+-   `p`: Put (paste) yanked line below current line
+-   `u`: Undo last change
+-   `Ctrl-r`: Redo last undone change
+-   `.`: Repeat last change
 -   `:`: Enter **Command Mode**
 -   `q`: Quit the editor (if no unsaved changes)
 
