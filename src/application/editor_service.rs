@@ -28,13 +28,18 @@ impl<T: FileIO> EditorService<T> {
         Ok(())
     }
 
-    pub fn save_file(&self) -> io::Result<()> {
-        if let Some(path) = self.editor_model.get_filepath() {
-            let content = self.editor_model.get_content();
-            self.file_io.write_file(path, &content)
+    pub fn save_file(&mut self, new_filepath: Option<&str>) -> io::Result<()> {
+        let path_to_save = if let Some(new_path) = new_filepath {
+            self.editor_model.set_filepath(new_path.to_string());
+            new_path
+        } else if let Some(existing_path) = self.editor_model.get_filepath() {
+            existing_path
         } else {
-            Err(Error::new(ErrorKind::Other, "No file path to save to"))
-        }
+            return Err(Error::new(ErrorKind::Other, "No file path to save to"));
+        };
+
+        let content = self.editor_model.get_content();
+        self.file_io.write_file(path_to_save, &content)
     }
 
     pub fn move_cursor(&mut self, key: KeyCode) {
@@ -62,9 +67,11 @@ impl<T: FileIO> EditorService<T> {
     }
 
     pub fn handle_command(&mut self, command: &str) -> io::Result<HandleCommandResult> {
-        match command {
+        let parts: Vec<&str> = command.splitn(2, ' ').collect();
+        match parts[0] {
             "w" => {
-                self.save_file()?;
+                let filepath = parts.get(1).copied();
+                self.save_file(filepath)?;
                 Ok(HandleCommandResult::Continue)
             }
             "q" => Ok(HandleCommandResult::Quit),
@@ -170,7 +177,7 @@ mod tests {
             .set_filepath("save_test.txt".to_string());
         editor_service.editor_model.set_content("save content");
 
-        let result = editor_service.save_file();
+        let result = editor_service.save_file(None);
         assert!(result.is_ok());
 
         // MockFileIOのインスタンスを直接保持し、そこからwritten_dataを取得
@@ -183,11 +190,30 @@ mod tests {
     #[test]
     fn test_save_file_no_filepath() {
         let mock_file_io = MockFileIO::new();
-        let editor_service = EditorService::new(mock_file_io);
+        let mut editor_service = EditorService::new(mock_file_io);
 
-        let result = editor_service.save_file();
+        let result = editor_service.save_file(None);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::Other);
+    }
+
+    #[test]
+    fn test_save_new_file_with_command() {
+        let mock_file_io = MockFileIO::new();
+        let mut editor_service = EditorService::new(mock_file_io);
+        editor_service.editor_model.set_content("new file content");
+
+        let result = editor_service.handle_command("w new_file.txt");
+        assert!(result.is_ok());
+
+        let written = editor_service.file_io.get_written_data();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].0, "new_file.txt");
+        assert_eq!(written[0].1, "new file content");
+        assert_eq!(
+            editor_service.editor_model.get_filepath(),
+            Some(&"new_file.txt".to_string())
+        );
     }
 
     #[test]
@@ -203,7 +229,7 @@ mod tests {
             .set_filepath("error_test.txt".to_string());
         editor_service.editor_model.set_content("error content");
 
-        let result = editor_service.save_file();
+        let result = editor_service.save_file(None);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
     }
