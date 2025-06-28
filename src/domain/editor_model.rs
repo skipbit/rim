@@ -176,6 +176,19 @@ impl EditorModel {
         self.lines.insert(self.cursor_y, String::new());
         self.cursor_x = 0;
     }
+
+    pub fn delete_current_line(&mut self) {
+        if !self.lines.is_empty() {
+            self.lines.remove(self.cursor_y);
+            if self.cursor_y >= self.lines.len() && self.cursor_y > 0 {
+                self.cursor_y -= 1;
+            }
+            if self.lines.is_empty() {
+                self.lines.push(String::new());
+            }
+            self.cursor_x = 0;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -392,6 +405,59 @@ mod tests {
         editor.cursor_x = 0;
         editor.delete_char_under_cursor();
         assert_eq!(editor.lines[0], "");
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_delete_current_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.lines.push("line3".to_string());
+        editor.cursor_y = 1;
+        editor.delete_current_line();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[0], "line1");
+        assert_eq!(editor.lines[1], "line3");
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_delete_current_line_first_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 0;
+        editor.delete_current_line();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "line2");
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_delete_current_line_last_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.lines.push("line2".to_string());
+        editor.cursor_y = 1;
+        editor.delete_current_line();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "line1");
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_delete_current_line_single_line() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.cursor_y = 0;
+        editor.delete_current_line();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "");
+        assert_eq!(editor.cursor_y, 0);
         assert_eq!(editor.cursor_x, 0);
     }
 }

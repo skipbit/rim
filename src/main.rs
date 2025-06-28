@@ -35,6 +35,7 @@ fn run() -> io::Result<()> {
     let file_io = LocalFileIO;
     let mut editor_service = EditorService::new(file_io);
     let mut status_message = String::new();
+    let mut d_pressed = false;
 
     if args.len() > 1 {
         editor_service.open_file(&args[1])?;
@@ -97,9 +98,22 @@ fn run() -> io::Result<()> {
                         KeyCode::Char('x') => {
                             editor_service.editor_model.delete_char_under_cursor();
                             status_message.clear();
+                            d_pressed = false;
+                        }
+                        KeyCode::Char('d') => {
+                            if d_pressed {
+                                editor_service.editor_model.delete_current_line();
+                                status_message.clear();
+                                d_pressed = false;
+                            } else {
+                                d_pressed = true;
+                                status_message = "d".to_string();
+                            }
                         }
                         KeyCode::Char('q') => break,
-                        _ => {}
+                        _ => {
+                            d_pressed = false;
+                        }
                     },
                     EditorMode::Insert => match event.code {
                         KeyCode::Esc => {
