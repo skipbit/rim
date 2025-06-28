@@ -14,6 +14,8 @@ pub struct EditorModel {
     pub mode: EditorMode,
     pub command_buffer: String,
     pub yanked_line: Option<String>,
+    history: Vec<(Vec<String>, usize, usize)>,
+    history_index: usize,
 }
 
 impl EditorModel {
@@ -26,6 +28,8 @@ impl EditorModel {
             cursor_y: 0,
             filepath: None,
             yanked_line: None,
+            history: Vec::new(),
+            history_index: 0,
         }
     }
 
@@ -203,6 +207,34 @@ impl EditorModel {
             self.lines.insert(self.cursor_y + 1, yanked_line.clone());
             self.cursor_y += 1;
             self.cursor_x = 0;
+        }
+    }
+
+    pub fn save_snapshot(&mut self) {
+        // Clear any 'future' history if we're not at the latest state
+        self.history.truncate(self.history_index);
+        self.history
+            .push((self.lines.clone(), self.cursor_x, self.cursor_y));
+        self.history_index += 1;
+    }
+
+    pub fn undo(&mut self) {
+        if self.history_index > 1 {
+            self.history_index -= 1;
+            let (lines, cursor_x, cursor_y) = &self.history[self.history_index - 1];
+            self.lines = lines.clone();
+            self.cursor_x = *cursor_x;
+            self.cursor_y = *cursor_y;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if self.history_index < self.history.len() {
+            self.history_index += 1;
+            let (lines, cursor_x, cursor_y) = &self.history[self.history_index - 1];
+            self.lines = lines.clone();
+            self.cursor_x = *cursor_x;
+            self.cursor_y = *cursor_y;
         }
     }
 }
@@ -515,5 +547,55 @@ mod tests {
         assert_eq!(editor.lines[1], "");
         assert_eq!(editor.cursor_y, 1);
         assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_save_snapshot() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.save_snapshot();
+        assert_eq!(editor.history.len(), 1);
+        assert_eq!(editor.history_index, 1);
+        assert_eq!(editor.history[0].0, vec!["line1"]);
+    }
+
+    #[test]
+    fn test_undo() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.save_snapshot();
+        editor.lines.push("line2".to_string());
+        editor.save_snapshot();
+        editor.undo();
+        assert_eq!(editor.lines, vec!["line1"]);
+        assert_eq!(editor.history_index, 1);
+    }
+
+    #[test]
+    fn test_redo() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.save_snapshot();
+        editor.lines.push("line2".to_string());
+        editor.save_snapshot();
+        editor.undo();
+        editor.redo();
+        assert_eq!(editor.lines, vec!["line1", "line2"]);
+        assert_eq!(editor.history_index, 2);
+    }
+
+    #[test]
+    fn test_save_snapshot_after_undo() {
+        let mut editor = EditorModel::new();
+        editor.lines.push("line1".to_string());
+        editor.save_snapshot();
+        editor.lines.push("line2".to_string());
+        editor.save_snapshot();
+        editor.undo();
+        editor.lines.push("line3".to_string());
+        editor.save_snapshot();
+        assert_eq!(editor.history.len(), 2);
+        assert_eq!(editor.history_index, 2);
+        assert_eq!(editor.history[1].0, vec!["line1", "line3"]);
     }
 }

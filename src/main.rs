@@ -128,6 +128,20 @@ fn run() -> io::Result<()> {
                             d_pressed = false;
                             y_pressed = false;
                         }
+                        KeyCode::Char('u') => {
+                            editor_service.editor_model.undo();
+                            status_message = "Undo".to_string();
+                            d_pressed = false;
+                            y_pressed = false;
+                        }
+                        KeyCode::Char('r') => {
+                            if event.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                editor_service.editor_model.redo();
+                                status_message = "Redo".to_string();
+                            }
+                            d_pressed = false;
+                            y_pressed = false;
+                        }
                         KeyCode::Char('q') => break,
                         _ => {
                             d_pressed = false;
