@@ -39,3 +39,24 @@ impl<T: FileIO> EditorCommand<T> for QuitCommand {
         vec!["q", "quit"]
     }
 }
+
+pub struct EditCommand {
+    filepath: String,
+}
+
+impl EditCommand {
+    pub fn new(filepath: String) -> Self {
+        Self { filepath }
+    }
+}
+
+impl<T: FileIO> EditorCommand<T> for EditCommand {
+    fn execute(&self, editor_service: &mut EditorService<T>) -> io::Result<HandleCommandResult> {
+        editor_service.open_file(&self.filepath)?;
+        Ok(HandleCommandResult::Continue)
+    }
+
+    fn names(&self) -> Vec<&'static str> {
+        vec!["e", "edit"]
+    }
+}

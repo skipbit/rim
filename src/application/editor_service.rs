@@ -3,7 +3,7 @@ use crate::infrastructure::file_io::FileIO;
 use crossterm::event::KeyCode;
 use std::io::{self, Error, ErrorKind};
 
-use crate::application::commands::{EditorCommand, QuitCommand, WriteCommand};
+use crate::application::commands::{EditCommand, EditorCommand, QuitCommand, WriteCommand};
 
 #[derive(Debug)]
 pub enum HandleCommandResult {
@@ -74,8 +74,11 @@ impl<T: FileIO> EditorService<T> {
         let command_name = parts[0];
         let arg = parts.get(1).map(|s| s.to_string());
 
-        let commands: Vec<Box<dyn EditorCommand<T>>> =
-            vec![Box::new(WriteCommand::new(arg)), Box::new(QuitCommand)];
+        let commands: Vec<Box<dyn EditorCommand<T>>> = vec![
+            Box::new(WriteCommand::new(arg.clone())),
+            Box::new(QuitCommand),
+            Box::new(EditCommand::new(arg.unwrap_or_default())),
+        ];
 
         for cmd in commands {
             if cmd.names().contains(&command_name) {
@@ -268,6 +271,47 @@ mod tests {
         let result = editor_service.handle_command("unknown");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_edit_command_success() {
+        let mut mock_file_io = MockFileIO::new();
+        mock_file_io.set_read_content("file content");
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("e existing_file.txt");
+        assert!(result.is_ok());
+        assert_eq!(editor_service.editor_model.lines, vec!["file content"]);
+        assert_eq!(
+            editor_service.editor_model.get_filepath(),
+            Some(&"existing_file.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_edit_long_command_success() {
+        let mut mock_file_io = MockFileIO::new();
+        mock_file_io.set_read_content("file content");
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("edit existing_file_long.txt");
+        assert!(result.is_ok());
+        assert_eq!(editor_service.editor_model.lines, vec!["file content"]);
+        assert_eq!(
+            editor_service.editor_model.get_filepath(),
+            Some(&"existing_file_long.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_edit_command_file_not_found() {
+        let mut mock_file_io = MockFileIO::new();
+        mock_file_io.set_read_error(io::Error::new(ErrorKind::NotFound, "File not found"));
+        let mut editor_service = EditorService::new(mock_file_io);
+
+        let result = editor_service.handle_command("e non_existent_file.txt");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::NotFound);
     }
 
     #[test]
