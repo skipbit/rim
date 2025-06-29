@@ -30,17 +30,38 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+use application::normal_commands::*;
+use std::collections::HashMap;
+
 fn run() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let file_io = LocalFileIO;
     let mut editor_service = EditorService::new(file_io);
     let mut status_message = String::new();
-    let mut d_pressed = false;
-    let mut _y_pressed = false;
 
     if args.len() > 1 {
         editor_service.open_file(&args[1])?;
     }
+
+    let mut normal_commands: HashMap<KeyCode, Box<dyn NormalCommand<LocalFileIO>>> = HashMap::new();
+    normal_commands.insert(KeyCode::Char('i'), Box::new(SwitchToInsertMode));
+    normal_commands.insert(KeyCode::Char('h'), Box::new(MoveCursorLeft));
+    normal_commands.insert(KeyCode::Char('j'), Box::new(MoveCursorDown));
+    normal_commands.insert(KeyCode::Char('k'), Box::new(MoveCursorUp));
+    normal_commands.insert(KeyCode::Char('l'), Box::new(MoveCursorRight));
+    normal_commands.insert(KeyCode::Char('o'), Box::new(InsertLineBelow));
+    normal_commands.insert(KeyCode::Char('O'), Box::new(InsertLineAbove));
+    normal_commands.insert(KeyCode::Char('x'), Box::new(DeleteCharUnderCursor));
+    normal_commands.insert(KeyCode::Char('p'), Box::new(PutLineBelow));
+    normal_commands.insert(KeyCode::Char('u'), Box::new(Undo));
+    normal_commands.insert(KeyCode::Char('r'), Box::new(Redo));
+    normal_commands.insert(KeyCode::Char('.'), Box::new(RepeatLastChange));
+    normal_commands.insert(KeyCode::Char('/'), Box::new(SwitchToSearchMode));
+    normal_commands.insert(KeyCode::Char('n'), Box::new(FindNext));
+    normal_commands.insert(KeyCode::Char('N'), Box::new(FindPrevious));
+    normal_commands.insert(KeyCode::Char(':'), Box::new(SwitchToCommandMode));
+    normal_commands.insert(KeyCode::Char('d'), Box::new(DKeyHandler));
+    normal_commands.insert(KeyCode::Char('q'), Box::new(Quit));
 
     let mut stdout = io::stdout();
     loop {
@@ -49,119 +70,14 @@ fn run() -> io::Result<()> {
         if event::poll(Duration::from_millis(500))? {
             if let Event::Key(event) = event::read()? {
                 match editor_service.editor_model.mode {
-                    EditorMode::Normal => match event.code {
-                        KeyCode::Char('i') => {
-                            editor_service.set_mode(EditorMode::Insert);
-                            status_message = "-- INSERT --".to_string();
-                        }
-                        KeyCode::Char('a') => {
-                            editor_service.set_mode(EditorMode::Insert);
-                            status_message.clear();
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('A') => {
-                            editor_service.set_mode(EditorMode::Insert);
-                            status_message.clear();
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char(':') => {
-                            editor_service.set_mode(EditorMode::Command);
-                            status_message = ":".to_string();
-                        }
-                        KeyCode::Char('h') => {
-                            editor_service.move_cursor(KeyCode::Left);
-                            status_message.clear();
-                        }
-                        KeyCode::Char('j') => {
-                            editor_service.move_cursor(KeyCode::Down);
-                            status_message.clear();
-                        }
-                        KeyCode::Char('k') => {
-                            editor_service.move_cursor(KeyCode::Up);
-                            status_message.clear();
-                        }
-                        KeyCode::Char('l') => {
-                            editor_service.move_cursor(KeyCode::Right);
-                            status_message.clear();
-                        }
-                        KeyCode::Char('o') => {
-                            editor_service.editor_model.insert_line_below();
-                            editor_service.set_mode(EditorMode::Insert);
-                            status_message = "-- INSERT --".to_string();
-                        }
-                        KeyCode::Char('O') => {
-                            editor_service.editor_model.insert_line_above();
-                            editor_service.set_mode(EditorMode::Insert);
-                            status_message = "-- INSERT --".to_string();
-                        }
-                        KeyCode::Char('x') => {
-                            editor_service.editor_model.delete_char_under_cursor();
-                            status_message.clear();
-                            d_pressed = false;
-                        }
-                        KeyCode::Char('d') => {
-                            if d_pressed {
-                                editor_service.editor_model.delete_current_line();
-                                status_message.clear();
-                                d_pressed = false;
-                            } else {
-                                d_pressed = true;
-                                status_message = "d".to_string();
+                    EditorMode::Normal => {
+                        if let Some(command) = normal_commands.get(&event.code) {
+                            command.execute(&mut editor_service, &mut status_message, &event);
+                            if let KeyCode::Char('q') = event.code {
+                                break;
                             }
                         }
-                        KeyCode::Char('y') => {
-                            if d_pressed {
-                                editor_service.yank_current_line();
-                                status_message = "Yanked current line.".to_string();
-                            }
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('p') => {
-                            editor_service.editor_model.put_line_below();
-                            status_message.clear();
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('u') => {
-                            editor_service.editor_model.undo();
-                            status_message = "Undo".to_string();
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('r') => {
-                            if event.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                editor_service.editor_model.redo();
-                                status_message = "Redo".to_string();
-                            }
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('.') => {
-                            editor_service.editor_model.repeat_last_change();
-                            status_message.clear();
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('/') => {
-                            editor_service.set_mode(EditorMode::Search);
-                            editor_service.clear_command_buffer();
-                            status_message = "/".to_string();
-                        }
-                        KeyCode::Char('n') => {
-                            editor_service.find_next();
-                        }
-                        KeyCode::Char('N') => {
-                            editor_service.find_previous();
-                        }
-                        _ => {
-                            d_pressed = false;
-                            _y_pressed = false;
-                        }
-                    },
+                    }
                     EditorMode::Insert => match event.code {
                         KeyCode::Esc => {
                             editor_service.set_mode(EditorMode::Normal);
