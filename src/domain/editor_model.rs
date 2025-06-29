@@ -30,7 +30,6 @@ pub struct EditorModel {
     pub search_matches: Vec<(usize, usize)>,
     pub current_search_match: Option<usize>,
     pub d_pressed: bool,
-    pub y_pressed: bool,
     history: Vec<(Vec<String>, usize, usize)>,
     history_index: usize,
     last_change: Option<LastChange>,
@@ -50,7 +49,6 @@ impl EditorModel {
             search_matches: Vec::new(),
             current_search_match: None,
             d_pressed: false,
-            y_pressed: false,
             history: Vec::new(),
             history_index: 0,
             last_change: None,
@@ -275,7 +273,11 @@ impl EditorModel {
         }
 
         if !self.search_matches.is_empty() {
-            let initial_match_index = self.search_matches.iter().position(|&(y, x)| y >= self.cursor_y && x >= self.cursor_x).unwrap_or(0);
+            let initial_match_index = self
+                .search_matches
+                .iter()
+                .position(|&(y, x)| y >= self.cursor_y && x >= self.cursor_x)
+                .unwrap_or(0);
             self.current_search_match = Some(initial_match_index);
             let (y, x) = self.search_matches[initial_match_index];
             self.cursor_y = y;
