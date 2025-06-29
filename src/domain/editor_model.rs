@@ -156,8 +156,13 @@ impl EditorModel {
     }
 
     pub fn insert_line_below(&mut self) {
-        self.lines.insert(self.cursor_y + 1, String::new());
-        self.cursor_y += 1;
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+            self.cursor_y = 0;
+        } else {
+            self.lines.insert(self.cursor_y + 1, String::new());
+            self.cursor_y += 1;
+        }
         self.cursor_x = 0;
         self.last_change = Some(LastChange::InsertLineBelow);
         self.save_snapshot();
@@ -187,8 +192,13 @@ impl EditorModel {
 
     pub fn put_line_below(&mut self) {
         if let Some(yanked_line) = &self.yanked_line {
-            self.lines.insert(self.cursor_y + 1, yanked_line.clone());
-            self.cursor_y += 1;
+            if self.lines.is_empty() {
+                self.lines.push(yanked_line.clone());
+                self.cursor_y = 0;
+            } else {
+                self.lines.insert(self.cursor_y + 1, yanked_line.clone());
+                self.cursor_y += 1;
+            }
             self.cursor_x = 0;
             self.last_change = Some(LastChange::PutLineBelow);
             self.save_snapshot();
@@ -633,5 +643,15 @@ mod tests {
         assert_eq!(editor.lines.len(), 3);
         assert_eq!(editor.lines[1], "yanked");
         assert_eq!(editor.lines[2], "yanked");
+    }
+
+    #[test]
+    fn test_insert_line_below_empty_document() {
+        let mut editor = EditorModel::new();
+        editor.insert_line_below();
+        assert_eq!(editor.lines.len(), 1);
+        assert_eq!(editor.lines[0], "");
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 0);
     }
 }
