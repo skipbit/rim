@@ -33,6 +33,7 @@ pub fn draw_editor(
         EditorMode::Normal => "NORMAL",
         EditorMode::Insert => "INSERT",
         EditorMode::Command => "COMMAND",
+        EditorMode::Search => "SEARCH",
     };
 
     let status_bar = format!(

@@ -146,6 +146,17 @@ fn run() -> io::Result<()> {
                             _y_pressed = false;
                         }
                         KeyCode::Char('q') => break,
+                        KeyCode::Char('/') => {
+                            editor_service.set_mode(EditorMode::Search);
+                            editor_service.clear_command_buffer();
+                            status_message = "/".to_string();
+                        }
+                        KeyCode::Char('n') => {
+                            editor_service.find_next();
+                        }
+                        KeyCode::Char('N') => {
+                            editor_service.find_previous();
+                        }
                         _ => {
                             d_pressed = false;
                             _y_pressed = false;
@@ -203,6 +214,30 @@ fn run() -> io::Result<()> {
                                 }
                             }
                             editor_service.set_mode(EditorMode::Normal);
+                        }
+                        _ => {}
+                    },
+                    EditorMode::Search => match event.code {
+                        KeyCode::Esc => {
+                            editor_service.set_mode(EditorMode::Normal);
+                            editor_service.clear_command_buffer();
+                            status_message.clear();
+                        }
+                        KeyCode::Char(c) => {
+                            editor_service.push_command_char(c);
+                            status_message =
+                                format!("/{}", editor_service.editor_model.command_buffer);
+                        }
+                        KeyCode::Backspace => {
+                            editor_service.pop_command_char();
+                            status_message =
+                                format!("/{}", editor_service.editor_model.command_buffer);
+                        }
+                        KeyCode::Enter => {
+                            let query = editor_service.editor_model.command_buffer.clone();
+                            editor_service.search(&query);
+                            editor_service.set_mode(EditorMode::Normal);
+                            status_message.clear();
                         }
                         _ => {}
                     },

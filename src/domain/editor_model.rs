@@ -4,6 +4,7 @@ pub enum EditorMode {
     Normal,
     Insert,
     Command,
+    Search,
 }
 
 pub enum LastChange {
@@ -25,6 +26,9 @@ pub struct EditorModel {
     pub mode: EditorMode,
     pub command_buffer: String,
     pub yanked_line: Option<String>,
+    pub search_query: Option<String>,
+    pub search_matches: Vec<(usize, usize)>,
+    pub current_search_match: Option<usize>,
     history: Vec<(Vec<String>, usize, usize)>,
     history_index: usize,
     last_change: Option<LastChange>,
@@ -40,6 +44,9 @@ impl EditorModel {
             cursor_y: 0,
             filepath: None,
             yanked_line: None,
+            search_query: None,
+            search_matches: Vec::new(),
+            current_search_match: None,
             history: Vec::new(),
             history_index: 0,
             last_change: None,
@@ -245,6 +252,60 @@ impl EditorModel {
             self.lines = lines.clone();
             self.cursor_x = *cursor_x;
             self.cursor_y = *cursor_y;
+        }
+    }
+
+    pub fn search(&mut self, query: &str) {
+        self.search_query = Some(query.to_string());
+        self.search_matches.clear();
+        self.current_search_match = None;
+
+        if query.is_empty() {
+            return;
+        }
+
+        for (y, line) in self.lines.iter().enumerate() {
+            for (x, _) in line.match_indices(query) {
+                self.search_matches.push((y, x));
+            }
+        }
+
+        if !self.search_matches.is_empty() {
+            let initial_match_index = self.search_matches.iter().position(|&(y, x)| y >= self.cursor_y && x >= self.cursor_x).unwrap_or(0);
+            self.current_search_match = Some(initial_match_index);
+            let (y, x) = self.search_matches[initial_match_index];
+            self.cursor_y = y;
+            self.cursor_x = x;
+        }
+    }
+
+    pub fn find_next(&mut self) {
+        if let Some(current_match) = self.current_search_match {
+            if self.search_matches.is_empty() {
+                return;
+            }
+            let next_match_index = (current_match + 1) % self.search_matches.len();
+            self.current_search_match = Some(next_match_index);
+            let (y, x) = self.search_matches[next_match_index];
+            self.cursor_y = y;
+            self.cursor_x = x;
+        }
+    }
+
+    pub fn find_previous(&mut self) {
+        if let Some(current_match) = self.current_search_match {
+            if self.search_matches.is_empty() {
+                return;
+            }
+            let prev_match_index = if current_match == 0 {
+                self.search_matches.len() - 1
+            } else {
+                current_match - 1
+            };
+            self.current_search_match = Some(prev_match_index);
+            let (y, x) = self.search_matches[prev_match_index];
+            self.cursor_y = y;
+            self.cursor_x = x;
         }
     }
 }
@@ -653,5 +714,41 @@ mod tests {
         assert_eq!(editor.lines[0], "");
         assert_eq!(editor.cursor_y, 0);
         assert_eq!(editor.cursor_x, 0);
+    }
+
+    #[test]
+    fn test_search() {
+        let mut editor = EditorModel::new();
+        editor.lines = vec!["hello world".to_string(), "world hello".to_string()];
+        editor.search("world");
+        assert_eq!(editor.search_matches, vec![(0, 6), (1, 0)]);
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 6);
+    }
+
+    #[test]
+    fn test_find_next() {
+        let mut editor = EditorModel::new();
+        editor.lines = vec!["a b c".to_string(), "d e f".to_string()];
+        editor.search(" ");
+        editor.find_next();
+        assert_eq!(editor.cursor_y, 0);
+        assert_eq!(editor.cursor_x, 3);
+        editor.find_next();
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 1);
+    }
+
+    #[test]
+    fn test_find_previous() {
+        let mut editor = EditorModel::new();
+        editor.lines = vec!["a b c".to_string(), "d e f".to_string()];
+        editor.search(" ");
+        editor.find_previous();
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 3);
+        editor.find_previous();
+        assert_eq!(editor.cursor_y, 1);
+        assert_eq!(editor.cursor_x, 1);
     }
 }

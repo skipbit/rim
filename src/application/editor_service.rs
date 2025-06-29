@@ -120,6 +120,18 @@ impl<T: FileIO> EditorService<T> {
         self.editor_model.repeat_last_change();
     }
 
+    pub fn search(&mut self, query: &str) {
+        self.editor_model.search(query);
+    }
+
+    pub fn find_next(&mut self) {
+        self.editor_model.find_next();
+    }
+
+    pub fn find_previous(&mut self) {
+        self.editor_model.find_previous();
+    }
+
     pub fn handle_command(&mut self, command_str: &str) -> io::Result<HandleCommandResult> {
         let parts: Vec<&str> = command_str.splitn(2, ' ').collect();
         let command_name = parts[0];
