@@ -38,7 +38,7 @@ impl<T: FileIO> EditorService<T> {
         } else if let Some(existing_path) = self.editor_model.get_filepath() {
             existing_path
         } else {
-            return Err(Error::new(ErrorKind::Other, "No file path to save to"));
+            return Err(Error::other("No file path to save to"));
         };
 
         let content = self.editor_model.get_content();
@@ -58,7 +58,7 @@ impl<T: FileIO> EditorService<T> {
     }
 
     pub fn set_mode(&mut self, mode: EditorMode) {
-        self.editor_model.mode = mode;
+        self.editor_model.set_mode(mode);
     }
 
     pub fn push_command_char(&mut self, c: char) {
@@ -94,9 +94,12 @@ impl<T: FileIO> EditorService<T> {
     }
 
     pub fn yank_current_line(&mut self) {
-        if self.editor_model.cursor_y < self.editor_model.lines.len() {
-            self.editor_model.yanked_line =
-                Some(self.editor_model.lines[self.editor_model.cursor_y].clone());
+        if self.editor_model.cursor_y < self.editor_model.buffer.line_count() {
+            self.editor_model.yanked_line = Some(
+                self.editor_model
+                    .buffer
+                    .line_text(self.editor_model.cursor_y),
+            );
         }
     }
 
@@ -223,7 +226,10 @@ mod tests {
 
         let result = editor_service.open_file("test.txt");
         assert!(result.is_ok());
-        assert_eq!(editor_service.editor_model.lines, vec!["line1", "line2"]);
+        assert_eq!(
+            editor_service.editor_model.buffer.to_lines(),
+            vec!["line1", "line2"]
+        );
         assert_eq!(
             editor_service.editor_model.filepath,
             Some("test.txt".to_string())
@@ -344,7 +350,10 @@ mod tests {
 
         let result = editor_service.handle_command("e existing_file.txt");
         assert!(result.is_ok());
-        assert_eq!(editor_service.editor_model.lines, vec!["file content"]);
+        assert_eq!(
+            editor_service.editor_model.buffer.to_lines(),
+            vec!["file content"]
+        );
         assert_eq!(
             editor_service.editor_model.get_filepath(),
             Some(&"existing_file.txt".to_string())
@@ -359,7 +368,10 @@ mod tests {
 
         let result = editor_service.handle_command("edit existing_file_long.txt");
         assert!(result.is_ok());
-        assert_eq!(editor_service.editor_model.lines, vec!["file content"]);
+        assert_eq!(
+            editor_service.editor_model.buffer.to_lines(),
+            vec!["file content"]
+        );
         assert_eq!(
             editor_service.editor_model.get_filepath(),
             Some(&"existing_file_long.txt".to_string())
@@ -400,8 +412,8 @@ mod tests {
     fn test_move_cursor_delegation() {
         let mock_file_io = MockFileIO::new();
         let mut editor_service = EditorService::new(mock_file_io);
-        editor_service.editor_model.lines.push("line1".to_string());
-        editor_service.editor_model.lines.push("line2".to_string());
+        editor_service.editor_model.buffer.push_line("line1");
+        editor_service.editor_model.buffer.push_line("line2");
         editor_service.editor_model.cursor_y = 1;
 
         editor_service.move_cursor(KeyCode::Up);
@@ -412,20 +424,20 @@ mod tests {
     fn test_insert_char_delegation() {
         let mock_file_io = MockFileIO::new();
         let mut editor_service = EditorService::new(mock_file_io);
-        editor_service.editor_model.lines.push("".to_string());
+        editor_service.editor_model.buffer.push_line("");
 
         editor_service.insert_char('a');
-        assert_eq!(editor_service.editor_model.lines[0], "a");
+        assert_eq!(editor_service.editor_model.buffer.line_text(0), "a");
     }
 
     #[test]
     fn test_delete_char_delegation() {
         let mock_file_io = MockFileIO::new();
         let mut editor_service = EditorService::new(mock_file_io);
-        editor_service.editor_model.lines.push("abc".to_string());
+        editor_service.editor_model.buffer.push_line("abc");
         editor_service.editor_model.cursor_x = 3;
 
         editor_service.delete_char();
-        assert_eq!(editor_service.editor_model.lines[0], "ab");
+        assert_eq!(editor_service.editor_model.buffer.line_text(0), "ab");
     }
 }
