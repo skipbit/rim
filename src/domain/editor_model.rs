@@ -1,40 +1,10 @@
+use crate::domain::grapheme;
 use crate::domain::motion::{self, Motion, MotionKind, Target};
 use crate::domain::text_buffer::TextBuffer;
 use crate::domain::text_object::{self, TextObject};
 use crate::domain::transaction::{Change, Transaction};
 use crossterm::event::KeyCode;
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-/// Char offsets of every grapheme-cluster boundary in `line`, including 0 and
-/// the end. Horizontal cursor motion steps between these so a combining mark or
-/// ZWJ emoji sequence moves as one visual unit.
-fn grapheme_boundaries(line: &str) -> Vec<usize> {
-    let mut bounds = vec![0];
-    let mut chars = 0;
-    for g in line.graphemes(true) {
-        chars += g.chars().count();
-        bounds.push(chars);
-    }
-    bounds
-}
-
-/// Char offset of the grapheme boundary immediately after `char_idx`.
-fn next_grapheme(line: &str, char_idx: usize) -> usize {
-    grapheme_boundaries(line)
-        .into_iter()
-        .find(|&b| b > char_idx)
-        .unwrap_or(char_idx)
-}
-
-/// Char offset of the grapheme boundary immediately before `char_idx`.
-fn prev_grapheme(line: &str, char_idx: usize) -> usize {
-    grapheme_boundaries(line)
-        .into_iter()
-        .rev()
-        .find(|&b| b < char_idx)
-        .unwrap_or(0)
-}
 
 pub enum EditorMode {
     Normal,
@@ -147,7 +117,7 @@ impl EditorModel {
             KeyCode::Left => {
                 if self.cursor_x > 0 {
                     let line = self.buffer.line_text(self.cursor_y);
-                    self.cursor_x = prev_grapheme(&line, self.cursor_x);
+                    self.cursor_x = grapheme::prev_boundary(&line, self.cursor_x);
                 } else if self.cursor_y > 0 {
                     self.cursor_y -= 1;
                     self.cursor_x = self.buffer.line_char_len(self.cursor_y);
@@ -157,7 +127,7 @@ impl EditorModel {
                 let line_len = self.buffer.line_char_len(self.cursor_y);
                 if self.cursor_x < line_len {
                     let line = self.buffer.line_text(self.cursor_y);
-                    self.cursor_x = next_grapheme(&line, self.cursor_x);
+                    self.cursor_x = grapheme::next_boundary(&line, self.cursor_x);
                 } else if self.cursor_y < self.buffer.line_count() - 1 {
                     self.cursor_y += 1;
                     self.cursor_x = 0;
@@ -374,16 +344,34 @@ impl EditorModel {
     }
 
     pub fn put_line_below(&mut self) {
-        self.paste(true);
+        self.paste(true, 1);
     }
 
-    /// Paste the unnamed register. `after` selects `p` (below/after) vs `P`
-    /// (above/before). Linewise registers paste onto new lines; charwise
-    /// registers paste inline.
-    pub fn paste(&mut self, after: bool) {
+    /// Delete `count` characters from under the cursor (the `x` command),
+    /// filling the unnamed register (charwise) like Vim.
+    pub fn delete_under_cursor(&mut self, count: usize) {
+        if self.cursor_y >= self.buffer.line_count() {
+            return;
+        }
+        let line_len = self.buffer.line_char_len(self.cursor_y);
+        if self.cursor_x >= line_len {
+            return;
+        }
+        let s = self.buffer.cursor_to_char(self.cursor_y, self.cursor_x);
+        let end_x = (self.cursor_x + count.max(1)).min(line_len);
+        let e = self.buffer.cursor_to_char(self.cursor_y, end_x);
+        self.operate_charwise_range(Operator::Delete, s, e);
+    }
+
+    /// Paste the unnamed register `count` times. `after` selects `p`
+    /// (below/after) vs `P` (above/before). Linewise registers paste onto new
+    /// lines; charwise registers paste inline.
+    pub fn paste(&mut self, after: bool, count: usize) {
         let Some(reg) = self.register.clone() else {
             return;
         };
+        let count = count.max(1);
+        let text = reg.text.repeat(count);
         let before = (self.cursor_y, self.cursor_x);
         if reg.linewise {
             let (pos, new_y) = if self.buffer.line_count() == 0 {
@@ -399,7 +387,7 @@ impl EditorModel {
             let change = Change {
                 pos,
                 removed: String::new(),
-                inserted: reg.text.clone(),
+                inserted: text,
             };
             change.apply(&mut self.buffer);
             self.cursor_y = new_y;
@@ -409,22 +397,22 @@ impl EditorModel {
         } else {
             // Charwise paste.
             let inserted = if self.buffer.line_count() == 0 {
-                format!("{}\n", reg.text)
+                format!("{}\n", text)
             } else {
-                reg.text.clone()
+                text.clone()
             };
             let pos = if self.buffer.line_count() == 0 {
                 0
             } else {
                 let line_len = self.buffer.line_char_len(self.cursor_y);
                 let x = if after && line_len > 0 {
-                    self.cursor_x + 1
+                    (self.cursor_x + 1).min(line_len)
                 } else {
                     self.cursor_x
                 };
                 self.buffer.cursor_to_char(self.cursor_y, x)
             };
-            let text_len = reg.text.chars().count();
+            let text_len = text.chars().count();
             let change = Change {
                 pos,
                 removed: String::new(),
@@ -492,59 +480,10 @@ impl EditorModel {
     }
 
     fn operate(&mut self, op: Operator, t: Target) -> bool {
-        let before = (self.cursor_y, self.cursor_x);
         if t.kind == MotionKind::Linewise {
             let lo = self.cursor_y.min(t.y);
-            let last = self.buffer.line_count().saturating_sub(1);
-            let hi = self.cursor_y.max(t.y).min(last);
-            let start = self.buffer.line_to_char(lo);
-            let end = self.buffer.line_to_char(hi + 1);
-            let reg_text = self.buffer.slice_text(start..end);
-            self.register = Some(Register {
-                text: reg_text,
-                linewise: true,
-            });
-            match op {
-                Operator::Yank => {
-                    self.cursor_y = lo;
-                    self.cursor_x = 0;
-                    false
-                }
-                Operator::Delete => {
-                    let change = if lo == 0 && hi >= last {
-                        // Deleting every line: keep one empty line.
-                        Change {
-                            pos: 0,
-                            removed: self.buffer.get_content(),
-                            inserted: String::new(),
-                        }
-                    } else {
-                        Change {
-                            pos: start,
-                            removed: self.buffer.slice_text(start..end),
-                            inserted: String::new(),
-                        }
-                    };
-                    change.apply(&mut self.buffer);
-                    self.cursor_y = lo.min(self.buffer.line_count().saturating_sub(1));
-                    self.cursor_x = 0;
-                    self.last_change = Some(LastChange::DeleteCurrentLine);
-                    self.commit(change, before, (self.cursor_y, self.cursor_x));
-                    false
-                }
-                Operator::Change => {
-                    let change = Change {
-                        pos: start,
-                        removed: self.buffer.slice_text(start..end),
-                        inserted: "\n".to_string(),
-                    };
-                    change.apply(&mut self.buffer);
-                    self.cursor_y = lo;
-                    self.cursor_x = 0;
-                    self.commit(change, before, (lo, 0));
-                    true
-                }
-            }
+            let hi = self.cursor_y.max(t.y);
+            self.operate_linewise_range(op, lo, hi)
         } else {
             let a = self.buffer.cursor_to_char(self.cursor_y, self.cursor_x);
             let b = self.buffer.cursor_to_char(t.y, t.x);
@@ -606,15 +545,87 @@ impl EditorModel {
         }
     }
 
-    /// Apply an operator over a text object (`diw`, `ci"`, `ya(` …).
+    /// Apply an operator over the whole lines `lo..=hi` (linewise). Shared by
+    /// linewise motions, `dd`/`cc`/`yy`, and linewise text objects (`ip`/`ap`).
+    fn operate_linewise_range(&mut self, op: Operator, lo: usize, hi: usize) -> bool {
+        let before = (self.cursor_y, self.cursor_x);
+        let last = self.buffer.line_count().saturating_sub(1);
+        let lo = lo.min(last);
+        let hi = hi.min(last);
+        let start = self.buffer.line_to_char(lo);
+        let end = self.buffer.line_to_char(hi + 1);
+        self.register = Some(Register {
+            text: self.buffer.slice_text(start..end),
+            linewise: true,
+        });
+        match op {
+            Operator::Yank => {
+                self.cursor_y = lo;
+                self.cursor_x = 0;
+                false
+            }
+            Operator::Delete => {
+                let change = if lo == 0 && hi >= last {
+                    // Deleting every line: keep one empty line.
+                    Change {
+                        pos: 0,
+                        removed: self.buffer.get_content(),
+                        inserted: String::new(),
+                    }
+                } else {
+                    Change {
+                        pos: start,
+                        removed: self.buffer.slice_text(start..end),
+                        inserted: String::new(),
+                    }
+                };
+                change.apply(&mut self.buffer);
+                self.cursor_y = lo.min(self.buffer.line_count().saturating_sub(1));
+                self.cursor_x = 0;
+                self.last_change = Some(LastChange::DeleteCurrentLine);
+                self.commit(change, before, (self.cursor_y, self.cursor_x));
+                false
+            }
+            Operator::Change => {
+                let change = Change {
+                    pos: start,
+                    removed: self.buffer.slice_text(start..end),
+                    inserted: "\n".to_string(),
+                };
+                change.apply(&mut self.buffer);
+                self.cursor_y = lo;
+                self.cursor_x = 0;
+                self.last_change = Some(LastChange::DeleteCurrentLine);
+                self.commit(change, before, (lo, 0));
+                true
+            }
+        }
+    }
+
+    /// Apply an operator over a text object (`diw`, `ci"`, `ya(`, `dip` …).
     pub fn apply_operator_textobject(
         &mut self,
         op: Operator,
         obj: TextObject,
         inner: bool,
+        count: usize,
     ) -> bool {
-        match text_object::range(&self.buffer, self.cursor_y, self.cursor_x, obj, inner) {
-            Some((s, e)) => self.operate_charwise_range(op, s, e),
+        match text_object::range(
+            &self.buffer,
+            self.cursor_y,
+            self.cursor_x,
+            obj,
+            inner,
+            count,
+        ) {
+            Some((s, e, true)) => {
+                // Linewise object (paragraph): convert the char range to lines.
+                let lo = self.buffer.char_to_line(s);
+                let hi = self.buffer.char_to_line(e.saturating_sub(1));
+                self.cursor_y = lo;
+                self.operate_linewise_range(op, lo, hi)
+            }
+            Some((s, e, false)) => self.operate_charwise_range(op, s, e),
             None => false,
         }
     }
@@ -1365,6 +1376,19 @@ mod tests {
     }
 
     #[test]
+    fn test_hl_motion_steps_by_grapheme() {
+        // Normal-mode h/l must move by grapheme cluster (matching MS1 insert-mode
+        // behaviour), not by scalar char.
+        let mut e = model("a\u{310}b"); // "a̐b": first grapheme is 2 chars
+        e.cursor_y = 0;
+        e.cursor_x = 0;
+        e.move_by_motion(Motion::Right, 1);
+        assert_eq!(e.cursor_x, 2); // skipped the combining mark with its base
+        e.move_by_motion(Motion::Left, 1);
+        assert_eq!(e.cursor_x, 0);
+    }
+
+    #[test]
     fn test_dw_deletes_word_and_trailing_space() {
         let mut e = model("foo bar");
         e.apply_operator(Operator::Delete, Motion::WordForward { big: false }, 1);
@@ -1465,7 +1489,7 @@ mod tests {
         e.apply_operator(Operator::Yank, Motion::WordForward { big: false }, 1);
         // register holds "foo " (charwise); cursor returns to start of yank
         assert_eq!((e.cursor_y, e.cursor_x), (0, 0));
-        e.paste(true); // paste after the char under cursor
+        e.paste(true, 1); // paste after the char under cursor
         assert_eq!(e.buffer.line_text(0), "ffoo oo bar");
     }
 
@@ -1474,7 +1498,7 @@ mod tests {
         let mut e = model("line1\nline2");
         e.cursor_y = 0;
         e.operate_current_lines(Operator::Yank, 1);
-        e.paste(true);
+        e.paste(true, 1);
         assert_eq!(
             e.buffer.to_lines(),
             vec![
@@ -1487,6 +1511,44 @@ mod tests {
     }
 
     #[test]
+    fn test_x_fills_register_and_honors_count() {
+        let mut e = model("abcdef");
+        e.cursor_x = 1;
+        e.delete_under_cursor(3); // delete "bcd"
+        assert_eq!(e.buffer.line_text(0), "aef");
+        assert_eq!(
+            e.register,
+            Some(Register {
+                text: "bcd".to_string(),
+                linewise: false
+            })
+        );
+        // x then p re-inserts the deleted text (Vim behaviour).
+        e.paste(true, 1);
+        assert_eq!(e.buffer.line_text(0), "aebcdf");
+    }
+
+    #[test]
+    fn test_x_clamps_to_line_end() {
+        let mut e = model("ab");
+        e.cursor_x = 1;
+        e.delete_under_cursor(5); // only "b" remains to delete
+        assert_eq!(e.buffer.line_text(0), "a");
+    }
+
+    #[test]
+    fn test_charwise_paste_count() {
+        let mut e = model("ab");
+        e.register = Some(Register {
+            text: "X".to_string(),
+            linewise: false,
+        });
+        e.cursor_x = 0;
+        e.paste(true, 3); // paste "XXX" after 'a'
+        assert_eq!(e.buffer.line_text(0), "aXXXb");
+    }
+
+    #[test]
     fn test_charwise_paste_before() {
         let mut e = model("abc");
         e.register = Some(Register {
@@ -1494,7 +1556,7 @@ mod tests {
             linewise: false,
         });
         e.cursor_x = 1; // on 'b'
-        e.paste(false); // P inserts before cursor
+        e.paste(false, 1); // P inserts before cursor
         assert_eq!(e.buffer.line_text(0), "aXbc");
         assert_eq!(e.cursor_x, 1);
     }

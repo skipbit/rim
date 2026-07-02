@@ -2,35 +2,65 @@
 
 This document outlines the current features and keybindings of the `rim` terminal editor.
 
+`rim` uses a rope-backed text buffer and a Unicode-correct cursor (char/grapheme
+coordinates, wide-character-aware display columns), with invertible-transaction
+undo and viewport scrolling.
+
 ## Modes
 
 `rim` operates in different modes, similar to Vim/NeoVim, to provide a powerful and efficient editing experience.
 
 ### 1. Normal Mode
 
-This is the default mode when you open or switch back to the editor. In Normal Mode, you can navigate the file and issue commands.
+The default mode. Navigate the file and issue commands. Most commands accept a
+leading **count** (e.g. `3w`, `2dd`, `d2w`).
 
-**Keybindings:**
+**Motions** (move the cursor; also usable as the range for an operator):
 
--   `h`: Move cursor left
--   `j`: Move cursor down
--   `k`: Move cursor up
--   `l`: Move cursor right
--   Arrow Keys: Move cursor (Left, Down, Up, Right)
--   `i`: Enter **Insert Mode** (insert at cursor)
--   `a`: Enter **Insert Mode** (append after cursor)
--   `A`: Enter **Insert Mode** (append at end of line)
--   `o`: Insert new line below current and enter **Insert Mode**
--   `O`: Insert new line above current and enter **Insert Mode**
--   `x`: Delete character under cursor
--   `dd`: Delete current line
--   `yy`: Yank (copy) current line
--   `p`: Put (paste) yanked line below current line
+-   `h` `j` `k` `l` / Arrow Keys: Move left / down / up / right (`h`/`l` move by grapheme cluster)
+-   `w` / `W`: Next word / WORD start
+-   `b` / `B`: Previous word / WORD start
+-   `e` / `E`: Next word / WORD end
+-   `ge` / `gE`: Previous word / WORD end
+-   `0`: First column
+-   `^`: First non-blank character
+-   `$`: End of line
+-   `gg`: First line (`<count>gg` → line _count_)
+-   `G`: Last line (`<count>G` → line _count_)
+-   `f{char}` / `F{char}`: To next / previous occurrence of `{char}` on the line
+-   `t{char}` / `T{char}`: Till before next / after previous `{char}`
+-   `;` / `,`: Repeat the last `f`/`t`/`F`/`T` in the same / opposite direction
+-   `%`: Jump to the matching bracket
+
+**Operators** (apply to a motion or text object; e.g. `dw`, `c$`, `y%`, `d2w`):
+
+-   `d`: Delete
+-   `c`: Change (delete, then enter Insert Mode; `cw` acts like `ce`)
+-   `y`: Yank (copy)
+-   Doubled — `dd` / `cc` / `yy`: Operate on whole line(s) (linewise)
+-   `D` / `C` / `Y`: Delete / change to end of line, yank line
+
+**Text objects** (after an operator, with `i` = inner or `a` = around; e.g. `diw`, `ci"`, `da(`, `dip`):
+
+-   `iw` / `aw`: Inner / a word (`W` for WORD)
+-   `i"` `i'` `` i` ``: Inside quotes (and `a"` etc. to include them)
+-   `i(` `i[` `i{` (also `ib` / `iB`): Inside brackets (and `a(` etc. to include them)
+-   `ip` / `ap`: Inner / a paragraph (linewise)
+-   Counts extend the object (e.g. `2iw`, `2i(` selects the next enclosing pair)
+
+**Editing & other:**
+
+-   `i` / `a`: Enter Insert Mode at / after the cursor
+-   `A` / `I`: Insert at end of line / at first non-blank
+-   `o` / `O`: Open a new line below / above and enter Insert Mode
+-   `x`: Delete character(s) under the cursor (fills the register; count-aware)
+-   `p` / `P`: Paste the register after / before the cursor (charwise or linewise; count-aware)
 -   `u`: Undo last change
 -   `Ctrl-r`: Redo last undone change
--   `.`: Repeat last change
--   `:`: Enter **Command Mode**
--   `q`: Quit the editor (if no unsaved changes)
+-   `.`: Repeat the last change *(currently repeats simple single-key edits; repeating a full operator+motion command is planned)*
+-   `/`: Enter Search Mode; `n` / `N`: next / previous match
+-   `:`: Enter Command Mode
+-   `q`: Quit the editor
 
 ### 2. Insert Mode
 
@@ -66,6 +96,11 @@ In Command Mode, you can execute various editor commands by typing them at the p
 -   `:e` or `:edit <filename>`
     -   Opens the specified file in the editor.
     -   Replaces the current buffer with the content of the new file.
+
+### 4. Search Mode
+
+Entered with `/` from Normal Mode. Type a query and press `Enter` to jump to the
+first match; `Esc` cancels. Use `n` / `N` in Normal Mode to cycle matches.
 
 ## New File Creation
 

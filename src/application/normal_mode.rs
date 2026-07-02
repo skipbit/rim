@@ -25,6 +25,9 @@ pub struct NormalMode {
     pending_object: Option<bool>,
     /// Set to `Some((till, forward))` after `f`/`t`/`F`/`T`, awaiting the target.
     pending_find: Option<(bool, bool)>,
+    /// The last completed `f`/`t`/`F`/`T` as `(target, till, forward)`, for
+    /// `;` (repeat) and `,` (repeat reversed). Persists across commands.
+    last_find: Option<(char, bool, bool)>,
 }
 
 impl NormalMode {
@@ -134,6 +137,12 @@ impl NormalMode {
                     };
                     self.run_motion(svc, motion, status);
                 }
+                KeyCode::Char('e') => {
+                    self.run_motion(svc, Motion::WordPrevEnd { big: false }, status)
+                }
+                KeyCode::Char('E') => {
+                    self.run_motion(svc, Motion::WordPrevEnd { big: true }, status)
+                }
                 _ => {
                     self.reset();
                     status.clear();
@@ -157,10 +166,14 @@ impl NormalMode {
                     Some(TextObject::Pair('{', '}'))
                 }
                 KeyCode::Char('[') | KeyCode::Char(']') => Some(TextObject::Pair('[', ']')),
+                KeyCode::Char('p') => Some(TextObject::Paragraph),
                 _ => None,
             };
             if let (Some(obj), Some(op)) = (obj, self.operator) {
-                let enter = svc.editor_model.apply_operator_textobject(op, obj, inner);
+                let count = self.effective_count();
+                let enter = svc
+                    .editor_model
+                    .apply_operator_textobject(op, obj, inner, count);
                 if enter {
                     self.enter_insert(svc, status);
                 } else {
@@ -174,6 +187,7 @@ impl NormalMode {
         // Target character of an `f`/`t`/`F`/`T` search.
         if let Some((till, forward)) = self.pending_find.take() {
             if let KeyCode::Char(target) = ev.code {
+                self.last_find = Some((target, till, forward));
                 self.run_motion(
                     svc,
                     Motion::Find {
@@ -240,6 +254,36 @@ impl NormalMode {
             KeyCode::Char('F') => self.pending_find = Some((false, false)),
             KeyCode::Char('T') => self.pending_find = Some((true, false)),
             KeyCode::Char('%') => self.run_motion(svc, Motion::MatchPair, status),
+            KeyCode::Char(';') => match self.last_find {
+                Some((target, till, forward)) => self.run_motion(
+                    svc,
+                    Motion::Find {
+                        target,
+                        till,
+                        forward,
+                    },
+                    status,
+                ),
+                None => {
+                    self.reset();
+                    status.clear();
+                }
+            },
+            KeyCode::Char(',') => match self.last_find {
+                Some((target, till, forward)) => self.run_motion(
+                    svc,
+                    Motion::Find {
+                        target,
+                        till,
+                        forward: !forward,
+                    },
+                    status,
+                ),
+                None => {
+                    self.reset();
+                    status.clear();
+                }
+            },
 
             // From here on, a pending operator with a non-motion key cancels.
             _ if self.operator.is_some() => {
@@ -313,17 +357,17 @@ impl NormalMode {
 
             // Editing actions.
             KeyCode::Char('x') => {
-                svc.editor_model.delete_char_under_cursor();
+                svc.editor_model.delete_under_cursor(self.effective_count());
                 self.reset();
                 status.clear();
             }
             KeyCode::Char('p') => {
-                svc.editor_model.paste(true);
+                svc.editor_model.paste(true, self.effective_count());
                 self.reset();
                 status.clear();
             }
             KeyCode::Char('P') => {
-                svc.editor_model.paste(false);
+                svc.editor_model.paste(false, self.effective_count());
                 self.reset();
                 status.clear();
             }
@@ -466,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn gg_and_G_jump() {
+    fn gg_and_uppercase_g_jump() {
         let mut nm = NormalMode::new();
         let mut svc = service("one\ntwo\nthree");
         press(&mut nm, &mut svc, "G");
@@ -575,6 +619,29 @@ mod tests {
     }
 
     #[test]
+    fn ge_via_g_prefix() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("foo bar");
+        svc.editor_model.cursor_x = 5; // in "bar"
+        press(&mut nm, &mut svc, "ge");
+        assert_eq!(svc.editor_model.cursor_x, 2); // end of "foo"
+    }
+
+    #[test]
+    fn semicolon_repeats_find_comma_reverses() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("a.b.c.d");
+        press(&mut nm, &mut svc, "f."); // -> first '.'
+        assert_eq!(svc.editor_model.cursor_x, 1);
+        press(&mut nm, &mut svc, ";"); // -> next '.'
+        assert_eq!(svc.editor_model.cursor_x, 3);
+        press(&mut nm, &mut svc, ";"); // -> next '.'
+        assert_eq!(svc.editor_model.cursor_x, 5);
+        press(&mut nm, &mut svc, ","); // reverse -> previous '.'
+        assert_eq!(svc.editor_model.cursor_x, 3);
+    }
+
+    #[test]
     fn percent_jumps_to_match() {
         let mut nm = NormalMode::new();
         let mut svc = service("a(bcd)e");
@@ -590,6 +657,51 @@ mod tests {
         svc.editor_model.cursor_x = 1; // on '('
         press(&mut nm, &mut svc, "d%");
         assert_eq!(svc.editor_model.buffer.line_text(0), "ae");
+    }
+
+    #[test]
+    fn dip_deletes_paragraph() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("a\nb\n\nc\nd");
+        svc.editor_model.cursor_y = 0;
+        press(&mut nm, &mut svc, "dip");
+        // First paragraph (a,b) deleted, leaving the blank line then c,d.
+        assert_eq!(
+            svc.editor_model.buffer.to_lines(),
+            vec!["".to_string(), "c".to_string(), "d".to_string()]
+        );
+    }
+
+    #[test]
+    fn dap_deletes_paragraph_and_trailing_blank() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("one\ntwo\n\nrest");
+        svc.editor_model.cursor_y = 0;
+        press(&mut nm, &mut svc, "dap"); // delete paragraph + following blank line
+        assert_eq!(svc.editor_model.buffer.to_lines(), vec!["rest".to_string()]);
+    }
+
+    #[test]
+    fn yap_yanks_paragraph_linewise() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("one\ntwo\n\nrest");
+        svc.editor_model.cursor_y = 0;
+        press(&mut nm, &mut svc, "yap");
+        assert_eq!(
+            svc.editor_model.register,
+            Some(crate::domain::editor_model::Register {
+                text: "one\ntwo\n\n".to_string(),
+                linewise: true,
+            })
+        );
+    }
+
+    #[test]
+    fn count_inner_word_object() {
+        let mut nm = NormalMode::new();
+        let mut svc = service("foo bar baz");
+        press(&mut nm, &mut svc, "d3iw"); // word + ws + word
+        assert_eq!(svc.editor_model.buffer.line_text(0), " baz");
     }
 
     #[test]
