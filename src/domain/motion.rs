@@ -1,3 +1,4 @@
+use crate::domain::grapheme;
 use crate::domain::text_buffer::TextBuffer;
 
 /// Whether a motion spans whole lines or a character range.
@@ -38,6 +39,10 @@ pub enum Motion {
     },
     /// `e` / `E`
     WordEnd {
+        big: bool,
+    },
+    /// `ge` / `gE` — backward to the end of the previous word.
+    WordPrevEnd {
         big: bool,
     },
     /// `0`
@@ -182,6 +187,25 @@ fn word_end(chars: &[char], mut i: usize, big: bool, count: usize) -> usize {
     i
 }
 
+fn word_prev_end(chars: &[char], mut i: usize, big: bool, count: usize) -> usize {
+    let n = chars.len();
+    let is_end = |k: usize| {
+        class(chars[k], big) != Class::Blank
+            && (k + 1 >= n || class(chars[k + 1], big) != class(chars[k], big))
+    };
+    for _ in 0..count {
+        if i == 0 {
+            break;
+        }
+        let mut k = i - 1;
+        while !is_end(k) && k > 0 {
+            k -= 1;
+        }
+        i = k;
+    }
+    i
+}
+
 /// Resolve `motion` from cursor `(y, x)` in `buf`, repeated `count` times where
 /// meaningful.
 pub fn compute(buf: &TextBuffer, y: usize, x: usize, motion: Motion, count: usize) -> Target {
@@ -189,7 +213,8 @@ pub fn compute(buf: &TextBuffer, y: usize, x: usize, motion: Motion, count: usiz
     let line_count = buf.line_count();
     match motion {
         Motion::Left => {
-            let nx = x.saturating_sub(count);
+            let line = buf.line_text(y);
+            let nx = grapheme::prev_n(&line, x, count);
             Target {
                 y,
                 x: nx,
@@ -198,8 +223,9 @@ pub fn compute(buf: &TextBuffer, y: usize, x: usize, motion: Motion, count: usiz
             }
         }
         Motion::Right => {
+            let line = buf.line_text(y);
             let max_x = buf.line_char_len(y);
-            let nx = (x + count).min(max_x);
+            let nx = grapheme::next_n(&line, x, count).min(max_x);
             Target {
                 y,
                 x: nx,
@@ -239,6 +265,11 @@ pub fn compute(buf: &TextBuffer, y: usize, x: usize, motion: Motion, count: usiz
             let chars: Vec<char> = buf.raw_content().chars().collect();
             let i = buf.cursor_to_char(y, x);
             charwise(buf, word_end(&chars, i, big, count), true)
+        }
+        Motion::WordPrevEnd { big } => {
+            let chars: Vec<char> = buf.raw_content().chars().collect();
+            let i = buf.cursor_to_char(y, x);
+            charwise(buf, word_prev_end(&chars, i, big, count), true)
         }
         Motion::LineStart => Target {
             y,
@@ -553,6 +584,17 @@ mod tests {
         assert_eq!((g.y, g.x, g.kind), (2, 0, MotionKind::Linewise));
         let goto = compute(&b, 0, 0, Motion::GotoLine(2), 1);
         assert_eq!((goto.y, goto.x), (1, 0));
+    }
+
+    #[test]
+    fn ge_backward_word_end() {
+        let ge = |s: &str, y, x| {
+            let t = compute(&buf(s), y, x, Motion::WordPrevEnd { big: false }, 1);
+            (t.y, t.x, t.inclusive)
+        };
+        assert_eq!(ge("foo bar", 0, 5), (0, 2, true)); // in "bar" -> end of "foo"
+        assert_eq!(ge("foo bar", 0, 6), (0, 2, true)); // end of "bar" -> end of "foo"
+        assert_eq!(ge("foo.bar", 0, 4), (0, 3, true)); // "bar" -> '.'
     }
 
     #[test]
