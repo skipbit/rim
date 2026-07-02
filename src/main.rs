@@ -3,6 +3,7 @@ mod domain;
 mod infrastructure;
 
 use application::editor_service::{EditorService, HandleCommandResult};
+use application::normal_mode::{NormalMode, NormalResult};
 use domain::editor_model::EditorMode;
 use infrastructure::file_io::LocalFileIO;
 use infrastructure::terminal_ui;
@@ -32,38 +33,16 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-use application::normal_commands::*;
-use std::collections::HashMap;
-
 fn run() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let file_io = LocalFileIO;
     let mut editor_service = EditorService::new(file_io);
     let mut status_message = String::new();
+    let mut normal_mode = NormalMode::new();
 
     if args.len() > 1 {
         editor_service.open_file(&args[1])?;
     }
-
-    let mut normal_commands: HashMap<KeyCode, Box<dyn NormalCommand<LocalFileIO>>> = HashMap::new();
-    normal_commands.insert(KeyCode::Char('i'), Box::new(SwitchToInsertMode));
-    normal_commands.insert(KeyCode::Char('h'), Box::new(MoveCursorLeft));
-    normal_commands.insert(KeyCode::Char('j'), Box::new(MoveCursorDown));
-    normal_commands.insert(KeyCode::Char('k'), Box::new(MoveCursorUp));
-    normal_commands.insert(KeyCode::Char('l'), Box::new(MoveCursorRight));
-    normal_commands.insert(KeyCode::Char('o'), Box::new(InsertLineBelow));
-    normal_commands.insert(KeyCode::Char('O'), Box::new(InsertLineAbove));
-    normal_commands.insert(KeyCode::Char('x'), Box::new(DeleteCharUnderCursor));
-    normal_commands.insert(KeyCode::Char('p'), Box::new(PutLineBelow));
-    normal_commands.insert(KeyCode::Char('u'), Box::new(Undo));
-    normal_commands.insert(KeyCode::Char('r'), Box::new(Redo));
-    normal_commands.insert(KeyCode::Char('.'), Box::new(RepeatLastChange));
-    normal_commands.insert(KeyCode::Char('/'), Box::new(SwitchToSearchMode));
-    normal_commands.insert(KeyCode::Char('n'), Box::new(FindNext));
-    normal_commands.insert(KeyCode::Char('N'), Box::new(FindPrevious));
-    normal_commands.insert(KeyCode::Char(':'), Box::new(SwitchToCommandMode));
-    normal_commands.insert(KeyCode::Char('d'), Box::new(DKeyHandler));
-    normal_commands.insert(KeyCode::Char('q'), Box::new(Quit));
 
     let mut stdout = io::stdout();
     loop {
@@ -80,11 +59,9 @@ fn run() -> io::Result<()> {
             if let Event::Key(event) = event::read()? {
                 match editor_service.editor_model.mode {
                     EditorMode::Normal => {
-                        if let Some(command) = normal_commands.get(&event.code) {
-                            command.execute(&mut editor_service, &mut status_message, &event);
-                            if let KeyCode::Char('q') = event.code {
-                                break;
-                            }
+                        match normal_mode.feed(&mut editor_service, &event, &mut status_message) {
+                            NormalResult::Quit => break,
+                            NormalResult::Continue => {}
                         }
                     }
                     EditorMode::Insert => match event.code {

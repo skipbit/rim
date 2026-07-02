@@ -1,3 +1,4 @@
+use crate::domain::motion::{self, Motion, MotionKind, Target};
 use crate::domain::text_buffer::TextBuffer;
 use crate::domain::transaction::{Change, Transaction};
 use crossterm::event::KeyCode;
@@ -52,6 +53,22 @@ pub enum LastChange {
     PutLineBelow,
 }
 
+/// A normal-mode operator applied over a motion or text-object range.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Operator {
+    Delete,
+    Change,
+    Yank,
+}
+
+/// The unnamed register: text captured by the last delete/change/yank, plus
+/// whether it was linewise (pasted onto new lines) or charwise (pasted inline).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Register {
+    pub text: String,
+    pub linewise: bool,
+}
+
 pub struct EditorModel {
     pub buffer: TextBuffer,
     pub cursor_x: usize,
@@ -61,11 +78,10 @@ pub struct EditorModel {
     pub filepath: Option<String>,
     pub mode: EditorMode,
     pub command_buffer: String,
-    pub yanked_line: Option<String>,
+    pub register: Option<Register>,
     pub search_query: Option<String>,
     pub search_matches: Vec<(usize, usize)>,
     pub current_search_match: Option<usize>,
-    pub d_pressed: bool,
     undo_stack: Vec<Transaction>,
     redo_stack: Vec<Transaction>,
     coalescing: bool,
@@ -83,11 +99,10 @@ impl EditorModel {
             row_offset: 0,
             col_offset: 0,
             filepath: None,
-            yanked_line: None,
+            register: None,
             search_query: None,
             search_matches: Vec::new(),
             current_search_match: None,
-            d_pressed: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             coalescing: false,
@@ -358,28 +373,220 @@ impl EditorModel {
     }
 
     pub fn put_line_below(&mut self) {
-        if let Some(yanked_line) = self.yanked_line.clone() {
-            let before = (self.cursor_y, self.cursor_x);
-            let change = if self.buffer.line_count() == 0 {
-                self.cursor_y = 0;
-                Change {
-                    pos: 0,
-                    removed: String::new(),
-                    inserted: format!("{}\n", yanked_line),
-                }
+        self.paste(true);
+    }
+
+    /// Paste the unnamed register. `after` selects `p` (below/after) vs `P`
+    /// (above/before). Linewise registers paste onto new lines; charwise
+    /// registers paste inline.
+    pub fn paste(&mut self, after: bool) {
+        let Some(reg) = self.register.clone() else {
+            return;
+        };
+        let before = (self.cursor_y, self.cursor_x);
+        if reg.linewise {
+            let (pos, new_y) = if self.buffer.line_count() == 0 {
+                (0, 0)
+            } else if after {
+                (
+                    self.buffer.line_to_char(self.cursor_y + 1),
+                    self.cursor_y + 1,
+                )
             } else {
-                let idx = self.buffer.line_to_char(self.cursor_y + 1);
-                self.cursor_y += 1;
-                Change {
-                    pos: idx,
-                    removed: String::new(),
-                    inserted: format!("{}\n", yanked_line),
-                }
+                (self.buffer.line_to_char(self.cursor_y), self.cursor_y)
+            };
+            let change = Change {
+                pos,
+                removed: String::new(),
+                inserted: reg.text.clone(),
             };
             change.apply(&mut self.buffer);
+            self.cursor_y = new_y;
             self.cursor_x = 0;
             self.last_change = Some(LastChange::PutLineBelow);
             self.commit(change, before, (self.cursor_y, self.cursor_x));
+        } else {
+            // Charwise paste.
+            let inserted = if self.buffer.line_count() == 0 {
+                format!("{}\n", reg.text)
+            } else {
+                reg.text.clone()
+            };
+            let pos = if self.buffer.line_count() == 0 {
+                0
+            } else {
+                let line_len = self.buffer.line_char_len(self.cursor_y);
+                let x = if after && line_len > 0 {
+                    self.cursor_x + 1
+                } else {
+                    self.cursor_x
+                };
+                self.buffer.cursor_to_char(self.cursor_y, x)
+            };
+            let text_len = reg.text.chars().count();
+            let change = Change {
+                pos,
+                removed: String::new(),
+                inserted,
+            };
+            change.apply(&mut self.buffer);
+            let (cy, cx) = self.char_to_cursor(pos + text_len.saturating_sub(1));
+            self.cursor_y = cy;
+            self.cursor_x = cx;
+            self.last_change = Some(LastChange::PutLineBelow);
+            self.commit(change, before, (self.cursor_y, self.cursor_x));
+        }
+    }
+
+    /// Map a whole-buffer char index to a clamped `(y, x)` cursor position.
+    fn char_to_cursor(&self, idx: usize) -> (usize, usize) {
+        if self.buffer.line_count() == 0 {
+            return (0, 0);
+        }
+        let len = self.buffer.len_chars();
+        if idx >= len {
+            let y = self.buffer.line_count() - 1;
+            return (y, self.buffer.line_char_len(y));
+        }
+        let y = self.buffer.char_to_line(idx);
+        let x = (idx - self.buffer.line_to_char(y)).min(self.buffer.line_char_len(y));
+        (y, x)
+    }
+
+    /// Move the cursor by a bare motion (no operator pending).
+    pub fn move_by_motion(&mut self, motion: Motion, count: usize) {
+        let t = motion::compute(&self.buffer, self.cursor_y, self.cursor_x, motion, count);
+        self.cursor_y = t.y.min(self.buffer.line_count().saturating_sub(1));
+        self.cursor_x = t.x.min(self.buffer.line_char_len(self.cursor_y));
+        self.coalescing = false;
+    }
+
+    /// Apply an operator over the range described by `motion`. Returns true when
+    /// the caller should switch to insert mode (the change operator).
+    pub fn apply_operator(&mut self, op: Operator, motion: Motion, count: usize) -> bool {
+        // `cw`/`cW` behaves like `ce`/`cE`: change up to the end of the word.
+        let motion = if op == Operator::Change {
+            match motion {
+                Motion::WordForward { big } => Motion::WordEnd { big },
+                other => other,
+            }
+        } else {
+            motion
+        };
+        let t = motion::compute(&self.buffer, self.cursor_y, self.cursor_x, motion, count);
+        self.operate(op, t)
+    }
+
+    /// Apply an operator to `count` whole lines from the cursor (dd/cc/yy).
+    pub fn operate_current_lines(&mut self, op: Operator, count: usize) -> bool {
+        let last = self.buffer.line_count().saturating_sub(1);
+        let target_y = (self.cursor_y + count.saturating_sub(1)).min(last);
+        let t = Target {
+            y: target_y,
+            x: 0,
+            kind: MotionKind::Linewise,
+            inclusive: false,
+        };
+        self.operate(op, t)
+    }
+
+    fn operate(&mut self, op: Operator, t: Target) -> bool {
+        let before = (self.cursor_y, self.cursor_x);
+        if t.kind == MotionKind::Linewise {
+            let lo = self.cursor_y.min(t.y);
+            let last = self.buffer.line_count().saturating_sub(1);
+            let hi = self.cursor_y.max(t.y).min(last);
+            let start = self.buffer.line_to_char(lo);
+            let end = self.buffer.line_to_char(hi + 1);
+            let reg_text = self.buffer.slice_text(start..end);
+            self.register = Some(Register {
+                text: reg_text,
+                linewise: true,
+            });
+            match op {
+                Operator::Yank => {
+                    self.cursor_y = lo;
+                    self.cursor_x = 0;
+                    false
+                }
+                Operator::Delete => {
+                    let change = if lo == 0 && hi >= last {
+                        // Deleting every line: keep one empty line.
+                        Change {
+                            pos: 0,
+                            removed: self.buffer.get_content(),
+                            inserted: String::new(),
+                        }
+                    } else {
+                        Change {
+                            pos: start,
+                            removed: self.buffer.slice_text(start..end),
+                            inserted: String::new(),
+                        }
+                    };
+                    change.apply(&mut self.buffer);
+                    self.cursor_y = lo.min(self.buffer.line_count().saturating_sub(1));
+                    self.cursor_x = 0;
+                    self.last_change = Some(LastChange::DeleteCurrentLine);
+                    self.commit(change, before, (self.cursor_y, self.cursor_x));
+                    false
+                }
+                Operator::Change => {
+                    let change = Change {
+                        pos: start,
+                        removed: self.buffer.slice_text(start..end),
+                        inserted: "\n".to_string(),
+                    };
+                    change.apply(&mut self.buffer);
+                    self.cursor_y = lo;
+                    self.cursor_x = 0;
+                    self.commit(change, before, (lo, 0));
+                    true
+                }
+            }
+        } else {
+            let a = self.buffer.cursor_to_char(self.cursor_y, self.cursor_x);
+            let mut b = self.buffer.cursor_to_char(t.y, t.x);
+            if t.inclusive {
+                b += 1;
+            } else if t.y > self.cursor_y && t.x == 0 {
+                // Exclusive motion landing at the start of a later line (e.g. `dw`
+                // at end of line): clamp to the end of the cursor's line so the
+                // newline is not deleted / lines are not joined.
+                b = self.buffer.line_to_char(self.cursor_y)
+                    + self.buffer.line_char_len(self.cursor_y);
+            }
+            let (s, e) = if a <= b { (a, b) } else { (b, a) };
+            if s == e {
+                return false;
+            }
+            let reg_text = self.buffer.slice_text(s..e);
+            self.register = Some(Register {
+                text: reg_text.clone(),
+                linewise: false,
+            });
+            match op {
+                Operator::Yank => {
+                    let (cy, cx) = self.char_to_cursor(s);
+                    self.cursor_y = cy;
+                    self.cursor_x = cx;
+                    false
+                }
+                Operator::Delete | Operator::Change => {
+                    let change = Change {
+                        pos: s,
+                        removed: reg_text,
+                        inserted: String::new(),
+                    };
+                    change.apply(&mut self.buffer);
+                    let (cy, cx) = self.char_to_cursor(s);
+                    self.cursor_y = cy;
+                    self.cursor_x = cx;
+                    self.last_change = Some(LastChange::DeleteChar);
+                    self.commit(change, before, (self.cursor_y, self.cursor_x));
+                    op == Operator::Change
+                }
+            }
         }
     }
 
@@ -867,7 +1074,10 @@ mod tests {
         editor.buffer.push_line("line1");
         editor.buffer.push_line("line2");
         editor.cursor_y = 0;
-        editor.yanked_line = Some("yanked_line".to_string());
+        editor.register = Some(Register {
+            text: "yanked_line\n".to_string(),
+            linewise: true,
+        });
         editor.put_line_below();
         assert_eq!(editor.buffer.line_count(), 3);
         assert_eq!(editor.buffer.line_text(1), "yanked_line");
@@ -880,7 +1090,10 @@ mod tests {
         let mut editor = EditorModel::new();
         editor.buffer.push_line("line1");
         editor.cursor_y = 0;
-        editor.yanked_line = Some("".to_string());
+        editor.register = Some(Register {
+            text: "\n".to_string(),
+            linewise: true,
+        });
         editor.put_line_below();
         assert_eq!(editor.buffer.line_count(), 2);
         assert_eq!(editor.buffer.line_text(1), "");
@@ -1057,7 +1270,10 @@ mod tests {
     fn test_repeat_last_change_put_line_below() {
         let mut editor = EditorModel::new();
         editor.buffer.push_line("line1");
-        editor.yanked_line = Some("yanked".to_string());
+        editor.register = Some(Register {
+            text: "yanked\n".to_string(),
+            linewise: true,
+        });
         editor.put_line_below();
         editor.repeat_last_change();
         assert_eq!(editor.buffer.line_count(), 3);
@@ -1109,5 +1325,148 @@ mod tests {
         editor.find_previous();
         assert_eq!(editor.cursor_y, 1);
         assert_eq!(editor.cursor_x, 1);
+    }
+
+    // ---- MS2: operators × motions ------------------------------------------
+
+    fn model(s: &str) -> EditorModel {
+        let mut e = EditorModel::new();
+        e.buffer.set_content(s);
+        e
+    }
+
+    #[test]
+    fn test_dw_deletes_word_and_trailing_space() {
+        let mut e = model("foo bar");
+        e.apply_operator(Operator::Delete, Motion::WordForward { big: false }, 1);
+        assert_eq!(e.buffer.line_text(0), "bar");
+        assert_eq!((e.cursor_y, e.cursor_x), (0, 0));
+    }
+
+    #[test]
+    fn test_de_deletes_to_word_end_inclusive() {
+        let mut e = model("foo bar");
+        e.apply_operator(Operator::Delete, Motion::WordEnd { big: false }, 1);
+        assert_eq!(e.buffer.line_text(0), " bar");
+    }
+
+    #[test]
+    fn test_dw_at_line_end_does_not_join() {
+        let mut e = model("foo\nbar");
+        e.cursor_y = 0;
+        e.cursor_x = 2; // last char of "foo"
+        e.apply_operator(Operator::Delete, Motion::WordForward { big: false }, 1);
+        assert_eq!(
+            e.buffer.to_lines(),
+            vec!["fo".to_string(), "bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_d_dollar_deletes_to_end_of_line() {
+        let mut e = model("hello world");
+        e.cursor_x = 6;
+        e.apply_operator(Operator::Delete, Motion::LineEnd, 1);
+        assert_eq!(e.buffer.line_text(0), "hello ");
+    }
+
+    #[test]
+    fn test_dd_deletes_current_line() {
+        let mut e = model("a\nb\nc");
+        e.cursor_y = 1;
+        e.operate_current_lines(Operator::Delete, 1);
+        assert_eq!(e.buffer.to_lines(), vec!["a".to_string(), "c".to_string()]);
+        assert_eq!(e.cursor_y, 1);
+    }
+
+    #[test]
+    fn test_count_dd_deletes_multiple_lines() {
+        let mut e = model("a\nb\nc\nd");
+        e.cursor_y = 0;
+        e.operate_current_lines(Operator::Delete, 2);
+        assert_eq!(e.buffer.to_lines(), vec!["c".to_string(), "d".to_string()]);
+    }
+
+    #[test]
+    fn test_dj_deletes_two_lines_linewise() {
+        let mut e = model("a\nb\nc");
+        e.cursor_y = 0;
+        e.apply_operator(Operator::Delete, Motion::Down, 1);
+        assert_eq!(e.buffer.to_lines(), vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn test_dd_all_lines_leaves_one_empty() {
+        let mut e = model("only");
+        e.operate_current_lines(Operator::Delete, 1);
+        assert_eq!(e.buffer.to_lines(), vec!["".to_string()]);
+    }
+
+    #[test]
+    fn test_cw_changes_to_word_end_and_enters_insert() {
+        let mut e = model("foo bar");
+        let enter = e.apply_operator(Operator::Change, Motion::WordForward { big: false }, 1);
+        assert!(enter); // change enters insert mode
+        assert_eq!(e.buffer.line_text(0), " bar"); // "foo" removed, trailing space kept
+        assert_eq!((e.cursor_y, e.cursor_x), (0, 0));
+    }
+
+    #[test]
+    fn test_cc_clears_line_keeps_it() {
+        let mut e = model("foo\nbar");
+        e.cursor_y = 0;
+        let enter = e.operate_current_lines(Operator::Change, 1);
+        assert!(enter);
+        assert_eq!(e.buffer.to_lines(), vec!["".to_string(), "bar".to_string()]);
+        assert_eq!((e.cursor_y, e.cursor_x), (0, 0));
+    }
+
+    #[test]
+    fn test_operator_is_single_undo_step() {
+        let mut e = model("foo bar");
+        e.apply_operator(Operator::Delete, Motion::WordForward { big: false }, 1);
+        assert_eq!(e.buffer.line_text(0), "bar");
+        e.undo();
+        assert_eq!(e.buffer.line_text(0), "foo bar");
+    }
+
+    #[test]
+    fn test_yank_word_then_charwise_paste() {
+        let mut e = model("foo bar");
+        e.apply_operator(Operator::Yank, Motion::WordForward { big: false }, 1);
+        // register holds "foo " (charwise); cursor returns to start of yank
+        assert_eq!((e.cursor_y, e.cursor_x), (0, 0));
+        e.paste(true); // paste after the char under cursor
+        assert_eq!(e.buffer.line_text(0), "ffoo oo bar");
+    }
+
+    #[test]
+    fn test_yy_then_linewise_paste() {
+        let mut e = model("line1\nline2");
+        e.cursor_y = 0;
+        e.operate_current_lines(Operator::Yank, 1);
+        e.paste(true);
+        assert_eq!(
+            e.buffer.to_lines(),
+            vec![
+                "line1".to_string(),
+                "line1".to_string(),
+                "line2".to_string()
+            ]
+        );
+        assert_eq!(e.cursor_y, 1);
+    }
+
+    #[test]
+    fn test_charwise_paste_before() {
+        let mut e = model("abc");
+        e.register = Some(Register {
+            text: "X".to_string(),
+            linewise: false,
+        });
+        e.cursor_x = 1; // on 'b'
+        e.paste(false); // P inserts before cursor
+        assert_eq!(e.buffer.line_text(0), "aXbc");
+        assert_eq!(e.cursor_x, 1);
     }
 }
