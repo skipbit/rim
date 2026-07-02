@@ -100,6 +100,18 @@ impl TextBuffer {
         self.rope.line_to_char(y)
     }
 
+    /// Logical line containing char index `idx`.
+    pub fn char_to_line(&self, idx: usize) -> usize {
+        self.rope.char_to_line(idx)
+    }
+
+    /// The raw buffer contents including the invariant-terminating newlines
+    /// (one `'\n'` per logical line). Motions scan this char sequence with
+    /// newlines acting as blanks.
+    pub fn raw_content(&self) -> String {
+        self.rope.to_string()
+    }
+
     /// Whole-buffer char index of cursor position `(y, x)`.
     pub fn cursor_to_char(&self, y: usize, x: usize) -> usize {
         self.rope.line_to_char(y) + x

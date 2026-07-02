@@ -93,21 +93,6 @@ impl<T: FileIO> EditorService<T> {
         self.editor_model.delete_current_line();
     }
 
-    pub fn yank_current_line(&mut self) {
-        if self.editor_model.cursor_y < self.editor_model.buffer.line_count() {
-            self.editor_model.yanked_line = Some(
-                self.editor_model
-                    .buffer
-                    .line_text(self.editor_model.cursor_y),
-            );
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn put_line_below(&mut self) {
-        self.editor_model.put_line_below();
-    }
-
     #[allow(dead_code)]
     pub fn undo(&mut self) {
         self.editor_model.undo();
