@@ -52,6 +52,15 @@ pub enum Motion {
     FileEnd,
     /// `<count>G` / `<count>gg` — jump to a 1-based line number.
     GotoLine(usize),
+    /// `f`/`t`/`F`/`T` — find a character on the current line. `till` stops one
+    /// short of the target (`t`/`T`); `forward` selects `f`/`t` vs `F`/`T`.
+    Find {
+        target: char,
+        till: bool,
+        forward: bool,
+    },
+    /// `%` — jump to the bracket matching the one at/after the cursor.
+    MatchPair,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -292,7 +301,159 @@ pub fn compute(buf: &TextBuffer, y: usize, x: usize, motion: Motion, count: usiz
                 inclusive: false,
             }
         }
+        Motion::Find {
+            target,
+            till,
+            forward,
+        } => find_char(buf, y, x, target, till, forward, count),
+        Motion::MatchPair => match_pair(buf, y, x),
     }
+}
+
+fn find_char(
+    buf: &TextBuffer,
+    y: usize,
+    x: usize,
+    target: char,
+    till: bool,
+    forward: bool,
+    count: usize,
+) -> Target {
+    let line: Vec<char> = buf.line_text(y).chars().collect();
+    let no_move = Target {
+        y,
+        x,
+        kind: MotionKind::Charwise,
+        inclusive: false,
+    };
+    if forward {
+        let mut remaining = count;
+        let mut found = None;
+        for (i, &c) in line.iter().enumerate().skip(x + 1) {
+            if c == target {
+                remaining -= 1;
+                if remaining == 0 {
+                    found = Some(i);
+                    break;
+                }
+            }
+        }
+        match found {
+            Some(fi) => {
+                let tx = if till { fi.saturating_sub(1) } else { fi };
+                Target {
+                    y,
+                    x: tx,
+                    kind: MotionKind::Charwise,
+                    inclusive: true,
+                }
+            }
+            None => no_move,
+        }
+    } else {
+        let mut remaining = count;
+        let mut found = None;
+        for i in (0..x).rev() {
+            if line[i] == target {
+                remaining -= 1;
+                if remaining == 0 {
+                    found = Some(i);
+                    break;
+                }
+            }
+        }
+        match found {
+            Some(fi) => {
+                let tx = if till { fi + 1 } else { fi };
+                Target {
+                    y,
+                    x: tx,
+                    kind: MotionKind::Charwise,
+                    inclusive: false,
+                }
+            }
+            None => no_move,
+        }
+    }
+}
+
+fn match_pair(buf: &TextBuffer, y: usize, x: usize) -> Target {
+    const PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
+    let no_move = Target {
+        y,
+        x,
+        kind: MotionKind::Charwise,
+        inclusive: false,
+    };
+    let line: Vec<char> = buf.line_text(y).chars().collect();
+    // Find the first bracket at or after the cursor on this line.
+    let Some((bx, brk)) = line
+        .iter()
+        .enumerate()
+        .skip(x)
+        .find(|(_, &c)| PAIRS.iter().any(|&(o, cl)| c == o || c == cl))
+        .map(|(i, &c)| (i, c))
+    else {
+        return no_move;
+    };
+    let chars: Vec<char> = buf.raw_content().chars().collect();
+    let gi = buf.line_to_char(y) + bx;
+    let target_gi = if let Some(&(o, cl)) = PAIRS.iter().find(|&&(o, _)| o == brk) {
+        scan_match(&chars, gi, o, cl, true)
+    } else if let Some(&(o, cl)) = PAIRS.iter().find(|&&(_, cl)| cl == brk) {
+        scan_match(&chars, gi, o, cl, false)
+    } else {
+        None
+    };
+    match target_gi {
+        Some(ti) => {
+            let (ty, tx) = char_to_yx(buf, ti);
+            Target {
+                y: ty,
+                x: tx,
+                kind: MotionKind::Charwise,
+                inclusive: true,
+            }
+        }
+        None => no_move,
+    }
+}
+
+/// Scan for the bracket matching `chars[from]`. `forward` searches right for the
+/// closing bracket; otherwise it searches left for the opening bracket.
+fn scan_match(
+    chars: &[char],
+    from: usize,
+    open: char,
+    close: char,
+    forward: bool,
+) -> Option<usize> {
+    let mut depth = 0i32;
+    if forward {
+        for (i, &c) in chars.iter().enumerate().skip(from) {
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+    } else {
+        for i in (0..=from).rev() {
+            let c = chars[i];
+            if c == close {
+                depth += 1;
+            } else if c == open {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -392,6 +553,80 @@ mod tests {
         assert_eq!((g.y, g.x, g.kind), (2, 0, MotionKind::Linewise));
         let goto = compute(&b, 0, 0, Motion::GotoLine(2), 1);
         assert_eq!((goto.y, goto.x), (1, 0));
+    }
+
+    #[test]
+    fn find_char_forward_and_till() {
+        let b = buf("hello world");
+        let f = compute(
+            &b,
+            0,
+            0,
+            Motion::Find {
+                target: 'o',
+                till: false,
+                forward: true,
+            },
+            1,
+        );
+        assert_eq!((f.y, f.x, f.inclusive), (0, 4, true)); // first 'o'
+        let f2 = compute(
+            &b,
+            0,
+            0,
+            Motion::Find {
+                target: 'o',
+                till: false,
+                forward: true,
+            },
+            2,
+        );
+        assert_eq!((f2.y, f2.x), (0, 7)); // second 'o'
+        let t = compute(
+            &b,
+            0,
+            0,
+            Motion::Find {
+                target: 'w',
+                till: true,
+                forward: true,
+            },
+            1,
+        );
+        assert_eq!((t.y, t.x), (0, 5)); // one before 'w'
+    }
+
+    #[test]
+    fn find_char_backward() {
+        let b = buf("hello world");
+        let f = compute(
+            &b,
+            0,
+            10,
+            Motion::Find {
+                target: 'o',
+                till: false,
+                forward: false,
+            },
+            1,
+        );
+        assert_eq!((f.y, f.x, f.inclusive), (0, 7, false)); // nearest 'o' to the left
+    }
+
+    #[test]
+    fn match_pair_forward_and_backward() {
+        let b = buf("a(bcd)e");
+        let fwd = compute(&b, 0, 1, Motion::MatchPair, 1);
+        assert_eq!((fwd.y, fwd.x), (0, 5)); // '(' -> ')'
+        let back = compute(&b, 0, 5, Motion::MatchPair, 1);
+        assert_eq!((back.y, back.x), (0, 1)); // ')' -> '('
+    }
+
+    #[test]
+    fn match_pair_across_lines() {
+        let b = buf("foo(\nbar\n)baz");
+        let t = compute(&b, 0, 3, Motion::MatchPair, 1);
+        assert_eq!((t.y, t.x), (2, 0)); // '(' on line 0 -> ')' on line 2
     }
 
     #[test]

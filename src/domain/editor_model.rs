@@ -1,5 +1,6 @@
 use crate::domain::motion::{self, Motion, MotionKind, Target};
 use crate::domain::text_buffer::TextBuffer;
+use crate::domain::text_object::{self, TextObject};
 use crate::domain::transaction::{Change, Transaction};
 use crossterm::event::KeyCode;
 use unicode_segmentation::UnicodeSegmentation;
@@ -546,47 +547,75 @@ impl EditorModel {
             }
         } else {
             let a = self.buffer.cursor_to_char(self.cursor_y, self.cursor_x);
-            let mut b = self.buffer.cursor_to_char(t.y, t.x);
-            if t.inclusive {
-                b += 1;
-            } else if t.y > self.cursor_y && t.x == 0 {
-                // Exclusive motion landing at the start of a later line (e.g. `dw`
-                // at end of line): clamp to the end of the cursor's line so the
-                // newline is not deleted / lines are not joined.
-                b = self.buffer.line_to_char(self.cursor_y)
-                    + self.buffer.line_char_len(self.cursor_y);
-            }
-            let (s, e) = if a <= b { (a, b) } else { (b, a) };
-            if s == e {
-                return false;
-            }
-            let reg_text = self.buffer.slice_text(s..e);
-            self.register = Some(Register {
-                text: reg_text.clone(),
-                linewise: false,
-            });
-            match op {
-                Operator::Yank => {
-                    let (cy, cx) = self.char_to_cursor(s);
-                    self.cursor_y = cy;
-                    self.cursor_x = cx;
-                    false
+            let b = self.buffer.cursor_to_char(t.y, t.x);
+            let (s, e) = if b >= a {
+                // Forward: inclusive extends past the target char.
+                let mut e = if t.inclusive { b + 1 } else { b };
+                if !t.inclusive && t.y > self.cursor_y && t.x == 0 {
+                    // Exclusive motion landing at column 0 of a later line (e.g.
+                    // `dw` at end of line): clamp to the end of the cursor's line
+                    // so the newline is not deleted / lines are not joined.
+                    e = self.buffer.line_to_char(self.cursor_y)
+                        + self.buffer.line_char_len(self.cursor_y);
                 }
-                Operator::Delete | Operator::Change => {
-                    let change = Change {
-                        pos: s,
-                        removed: reg_text,
-                        inserted: String::new(),
-                    };
-                    change.apply(&mut self.buffer);
-                    let (cy, cx) = self.char_to_cursor(s);
-                    self.cursor_y = cy;
-                    self.cursor_x = cx;
-                    self.last_change = Some(LastChange::DeleteChar);
-                    self.commit(change, before, (self.cursor_y, self.cursor_x));
-                    op == Operator::Change
-                }
+                (a, e)
+            } else {
+                // Backward: the range starts at the target; inclusive extends
+                // past the cursor's own char.
+                let e = if t.inclusive { a + 1 } else { a };
+                (b, e)
+            };
+            self.operate_charwise_range(op, s, e)
+        }
+    }
+
+    /// Apply an operator over an explicit half-open charwise range `[s, e)`
+    /// (shared by motions and text objects). Returns true for the change
+    /// operator (caller should enter insert mode).
+    fn operate_charwise_range(&mut self, op: Operator, s: usize, e: usize) -> bool {
+        if s >= e {
+            return false;
+        }
+        let before = (self.cursor_y, self.cursor_x);
+        let reg_text = self.buffer.slice_text(s..e);
+        self.register = Some(Register {
+            text: reg_text.clone(),
+            linewise: false,
+        });
+        match op {
+            Operator::Yank => {
+                let (cy, cx) = self.char_to_cursor(s);
+                self.cursor_y = cy;
+                self.cursor_x = cx;
+                false
             }
+            Operator::Delete | Operator::Change => {
+                let change = Change {
+                    pos: s,
+                    removed: reg_text,
+                    inserted: String::new(),
+                };
+                change.apply(&mut self.buffer);
+                let (cy, cx) = self.char_to_cursor(s);
+                self.cursor_y = cy;
+                self.cursor_x = cx;
+                self.last_change = Some(LastChange::DeleteChar);
+                self.commit(change, before, (self.cursor_y, self.cursor_x));
+                op == Operator::Change
+            }
+        }
+    }
+
+    /// Apply an operator over a text object (`diw`, `ci"`, `ya(` …).
+    pub fn apply_operator_textobject(
+        &mut self,
+        op: Operator,
+        obj: TextObject,
+        inner: bool,
+    ) -> bool {
+        match text_object::range(&self.buffer, self.cursor_y, self.cursor_x, obj, inner) {
+            Some((s, e)) => self.operate_charwise_range(op, s, e),
+            None => false,
         }
     }
 
