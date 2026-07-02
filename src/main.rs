@@ -10,7 +10,9 @@ use infrastructure::terminal_ui;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use std::env;
 use std::io;
@@ -65,6 +67,13 @@ fn run() -> io::Result<()> {
 
     let mut stdout = io::stdout();
     loop {
+        // Keep the cursor within the visible text area before rendering.
+        let (cols, rows) = size()?;
+        let text_height = (rows as usize).saturating_sub(2);
+        editor_service
+            .editor_model
+            .scroll_into_view(text_height, cols as usize);
+
         terminal_ui::draw_editor(&mut stdout, &editor_service.editor_model, &status_message)?;
 
         if event::poll(Duration::from_millis(500))? {
