@@ -4,7 +4,23 @@ This document outlines the current features and keybindings of the `rim` termina
 
 `rim` uses a rope-backed text buffer and a Unicode-correct cursor (char/grapheme
 coordinates, wide-character-aware display columns), with invertible-transaction
-undo and viewport scrolling.
+undo and viewport scrolling. It runs on an asynchronous (tokio) event loop, so
+background work never blocks input, and it renders **tree-sitter** syntax
+highlighting for the visible window.
+
+## Syntax Highlighting
+
+`rim` highlights source code using [tree-sitter](https://tree-sitter.github.io/).
+
+-   Rust is highlighted out of the box (keywords, functions, types, strings,
+    comments, constants, punctuation, …).
+-   Parsing runs on a **background thread**: edits are debounced (~30 ms) and
+    re-highlighted off the main loop, so typing never blocks on the parser.
+    Results are revision-tracked — stale results are dropped, and the previous
+    colours stay on screen until fresh ones arrive (no flash of unstyled text).
+-   Only the visible window is coloured; the previous plain rendering is used as
+    a fast path until the first highlights arrive (or if the grammar fails to
+    load, in which case the editor keeps working without colour).
 
 ## Modes
 
