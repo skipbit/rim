@@ -57,6 +57,10 @@ pub struct EditorModel {
     redo_stack: Vec<Transaction>,
     coalescing: bool,
     last_change: Option<LastChange>,
+    /// Monotonic counter bumped once per buffer edit (including undo/redo and
+    /// whole-file loads). The syntax layer compares it before/after handling
+    /// input to detect that the text changed and a re-highlight is due.
+    edit_revision: u64,
 }
 
 impl EditorModel {
@@ -78,7 +82,25 @@ impl EditorModel {
             redo_stack: Vec::new(),
             coalescing: false,
             last_change: None,
+            edit_revision: 0,
         }
+    }
+
+    /// The current edit revision (see the field docs). Cheap to read every
+    /// input cycle.
+    #[allow(dead_code)] // consumed by the syntax layer in a later milestone
+    pub fn edit_revision(&self) -> u64 {
+        self.edit_revision
+    }
+
+    /// The single point where a [`Change`] is applied to the buffer. Routing
+    /// every edit — inserts, deletes, operators, paste, **and undo/redo**
+    /// (which replay inverted changes) — through here guarantees
+    /// `edit_revision` bumps exactly once per edit. Any new edit path MUST call
+    /// this instead of `change.apply(&mut self.buffer)` directly.
+    fn apply_change(&mut self, change: &Change) {
+        Change::apply(change, &mut self.buffer);
+        self.edit_revision = self.edit_revision.wrapping_add(1);
     }
 
     /// Set the editor mode. Any mode transition ends the current insert-coalescing
@@ -90,6 +112,9 @@ impl EditorModel {
 
     pub fn set_content(&mut self, content: &str) {
         self.buffer.set_content(content);
+        // Whole-file load bypasses `Change`, so bump the revision here too — the
+        // syntax layer re-parses from scratch on the next cycle.
+        self.edit_revision = self.edit_revision.wrapping_add(1);
     }
 
     pub fn get_content(&self) -> String {
@@ -190,7 +215,7 @@ impl EditorModel {
                 inserted: c.to_string(),
             }
         };
-        change.apply(&mut self.buffer);
+        self.apply_change(&change);
         // In the empty-document case the cursor is (0, 0); either way it advances
         // one char to the right of the inserted character.
         self.cursor_x += 1;
@@ -211,7 +236,7 @@ impl EditorModel {
                 removed: self.buffer.slice_text(idx - 1..idx),
                 inserted: String::new(),
             };
-            change.apply(&mut self.buffer);
+            self.apply_change(&change);
             self.cursor_x -= 1;
             self.last_change = Some(LastChange::DeleteChar);
             self.commit(change, before, (self.cursor_y, self.cursor_x));
@@ -224,7 +249,7 @@ impl EditorModel {
                 removed: "\n".to_string(),
                 inserted: String::new(),
             };
-            change.apply(&mut self.buffer);
+            self.apply_change(&change);
             self.cursor_y -= 1;
             self.cursor_x = prev_len;
             self.last_change = Some(LastChange::DeleteChar);
@@ -244,7 +269,7 @@ impl EditorModel {
                 removed: self.buffer.slice_text(idx..idx + 1),
                 inserted: String::new(),
             };
-            change.apply(&mut self.buffer);
+            self.apply_change(&change);
             self.last_change = Some(LastChange::DeleteCharUnderCursor);
             self.commit(change, before, (self.cursor_y, self.cursor_x));
         }
@@ -267,7 +292,7 @@ impl EditorModel {
                 inserted: "\n".to_string(),
             }
         };
-        change.apply(&mut self.buffer);
+        self.apply_change(&change);
         self.cursor_y += 1;
         self.cursor_x = 0;
         self.last_change = Some(LastChange::InsertNewline);
@@ -292,7 +317,7 @@ impl EditorModel {
                 inserted: "\n".to_string(),
             }
         };
-        change.apply(&mut self.buffer);
+        self.apply_change(&change);
         self.cursor_x = 0;
         self.last_change = Some(LastChange::InsertLineBelow);
         self.commit(change, before, (self.cursor_y, self.cursor_x));
@@ -306,7 +331,7 @@ impl EditorModel {
             removed: String::new(),
             inserted: "\n".to_string(),
         };
-        change.apply(&mut self.buffer);
+        self.apply_change(&change);
         self.cursor_x = 0;
         self.last_change = Some(LastChange::InsertLineAbove);
         self.commit(change, before, (self.cursor_y, self.cursor_x));
@@ -334,7 +359,7 @@ impl EditorModel {
                 inserted: String::new(),
             }
         };
-        change.apply(&mut self.buffer);
+        self.apply_change(&change);
         if self.cursor_y >= self.buffer.line_count() && self.cursor_y > 0 {
             self.cursor_y -= 1;
         }
@@ -389,7 +414,7 @@ impl EditorModel {
                 removed: String::new(),
                 inserted: text,
             };
-            change.apply(&mut self.buffer);
+            self.apply_change(&change);
             self.cursor_y = new_y;
             self.cursor_x = 0;
             self.last_change = Some(LastChange::PutLineBelow);
@@ -418,7 +443,7 @@ impl EditorModel {
                 removed: String::new(),
                 inserted,
             };
-            change.apply(&mut self.buffer);
+            self.apply_change(&change);
             let (cy, cx) = self.char_to_cursor(pos + text_len.saturating_sub(1));
             self.cursor_y = cy;
             self.cursor_x = cx;
@@ -534,7 +559,7 @@ impl EditorModel {
                     removed: reg_text,
                     inserted: String::new(),
                 };
-                change.apply(&mut self.buffer);
+                self.apply_change(&change);
                 let (cy, cx) = self.char_to_cursor(s);
                 self.cursor_y = cy;
                 self.cursor_x = cx;
@@ -579,7 +604,7 @@ impl EditorModel {
                         inserted: String::new(),
                     }
                 };
-                change.apply(&mut self.buffer);
+                self.apply_change(&change);
                 self.cursor_y = lo.min(self.buffer.line_count().saturating_sub(1));
                 self.cursor_x = 0;
                 self.last_change = Some(LastChange::DeleteCurrentLine);
@@ -592,7 +617,7 @@ impl EditorModel {
                     removed: self.buffer.slice_text(start..end),
                     inserted: "\n".to_string(),
                 };
-                change.apply(&mut self.buffer);
+                self.apply_change(&change);
                 self.cursor_y = lo;
                 self.cursor_x = 0;
                 self.last_change = Some(LastChange::DeleteCurrentLine);
@@ -683,7 +708,7 @@ impl EditorModel {
 
     pub fn undo(&mut self) {
         if let Some(t) = self.undo_stack.pop() {
-            t.change.invert().apply(&mut self.buffer);
+            self.apply_change(&t.change.invert());
             self.cursor_y = t.cursor_before.0;
             self.cursor_x = t.cursor_before.1;
             self.redo_stack.push(t);
@@ -693,7 +718,7 @@ impl EditorModel {
 
     pub fn redo(&mut self) {
         if let Some(t) = self.redo_stack.pop() {
-            t.change.apply(&mut self.buffer);
+            self.apply_change(&t.change);
             self.cursor_y = t.cursor_after.0;
             self.cursor_x = t.cursor_after.1;
             self.undo_stack.push(t);
