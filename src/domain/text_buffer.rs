@@ -112,6 +112,45 @@ impl TextBuffer {
         self.rope.to_string()
     }
 
+    /// A cheap O(1) copy-on-write clone of the underlying rope. Used to hand a
+    /// consistent snapshot of the current text to the background
+    /// syntax-highlighting worker without materialising a `String` on the edit
+    /// path (the worker turns it into bytes off-thread).
+    #[allow(dead_code)] // consumed by the background syntax worker in a later milestone
+    pub fn snapshot(&self) -> Rope {
+        self.rope.clone()
+    }
+
+    // ---- byte coordinates (for tree-sitter / highlight span mapping) --------
+    //
+    // The cursor layer is char-indexed, but tree-sitter reports byte offsets.
+    // These delegate straight to ropey so highlight spans (byte ranges) can be
+    // mapped back onto logical lines and columns at render time.
+
+    /// Total length of the buffer in bytes.
+    #[allow(dead_code)] // wired up in the highlight-rendering milestone
+    pub fn len_bytes(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
+    /// Byte index of the first byte of logical line `y`.
+    #[allow(dead_code)] // wired up in the highlight-rendering milestone
+    pub fn line_to_byte(&self, y: usize) -> usize {
+        self.rope.line_to_byte(y)
+    }
+
+    /// Logical line containing byte index `byte_idx`.
+    #[allow(dead_code)] // wired up in the highlight-rendering milestone
+    pub fn byte_to_line(&self, byte_idx: usize) -> usize {
+        self.rope.byte_to_line(byte_idx)
+    }
+
+    /// Byte index of char index `char_idx`.
+    #[allow(dead_code)] // wired up in the highlight-rendering milestone
+    pub fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.rope.char_to_byte(char_idx)
+    }
+
     /// Whole-buffer char index of cursor position `(y, x)`.
     pub fn cursor_to_char(&self, y: usize, x: usize) -> usize {
         self.rope.line_to_char(y) + x
@@ -306,6 +345,33 @@ mod tests {
         let idx = buf.cursor_to_char(0, 1);
         buf.remove(idx..idx + 1);
         assert_eq!(buf.line_text(0), "あう");
+    }
+
+    #[test]
+    fn byte_coordinates_multibyte() {
+        let mut buf = TextBuffer::new();
+        buf.set_content("あい\nx");
+        // Stored under the trailing-newline invariant as "あい\nx\n":
+        // あ(3) い(3) \n(1) x(1) \n(1) = 9 bytes. "あい\n" = 7, so line 1 @ byte 7.
+        assert_eq!(buf.len_bytes(), 9);
+        assert_eq!(buf.line_to_byte(0), 0);
+        assert_eq!(buf.line_to_byte(1), 7);
+        assert_eq!(buf.byte_to_line(7), 1);
+        // char 1 is the second 'あい' char -> byte 3.
+        assert_eq!(buf.char_to_byte(1), 3);
+        // char 3 is 'x' on line 1 -> byte 7.
+        assert_eq!(buf.char_to_byte(3), 7);
+    }
+
+    #[test]
+    fn snapshot_is_independent_copy() {
+        let mut buf = TextBuffer::new();
+        buf.set_content("abc");
+        let snap = buf.snapshot();
+        buf.insert(1, "XY");
+        // The snapshot reflects the text at snapshot time, not later edits.
+        assert_eq!(snap.to_string(), "abc\n");
+        assert_eq!(buf.line_text(0), "aXYbc");
     }
 
     #[test]
