@@ -133,8 +133,8 @@ impl TextBuffer {
         self.rope.len_bytes()
     }
 
-    /// Byte index of the first byte of logical line `y`.
-    #[allow(dead_code)] // wired up in the highlight-rendering milestone
+    /// Byte index of the first byte of logical line `y`. Used by the renderer
+    /// to map highlight spans (byte ranges) onto visible lines.
     pub fn line_to_byte(&self, y: usize) -> usize {
         self.rope.line_to_byte(y)
     }

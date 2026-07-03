@@ -75,9 +75,4 @@ impl Syntax {
     pub fn spans(&self) -> &[HlSpan] {
         self.latest.as_ref().map_or(&[], |h| h.spans.as_slice())
     }
-
-    /// Revision of the currently shown highlights (0 if none yet).
-    pub fn revision(&self) -> u64 {
-        self.latest.as_ref().map_or(0, |h| h.revision)
-    }
 }

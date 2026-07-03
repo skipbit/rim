@@ -1,7 +1,8 @@
 use crate::domain::editor_model::{EditorMode, EditorModel};
+use crate::infrastructure::syntax_worker::{color_for, HlSpan};
 use crossterm::{
-    cursor, execute,
-    style::{Color, Print, ResetColor, SetBackgroundColor},
+    cursor, execute, queue,
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{size, Clear, ClearType},
 };
 use std::io::{self, Write};
@@ -30,10 +31,62 @@ fn visible_slice(line: &str, col_offset: usize, width: usize) -> String {
     out
 }
 
+/// The highlight style covering document byte `byte`, if any. `spans` must be
+/// sorted by `start_byte` and non-overlapping (as produced by the highlighter
+/// event walk in `syntax_worker`).
+fn style_at(spans: &[HlSpan], byte: usize) -> Option<usize> {
+    let i = spans.partition_point(|s| s.start_byte <= byte);
+    let s = spans.get(i.checked_sub(1)?)?;
+    (byte < s.end_byte).then_some(s.style)
+}
+
+/// Draw the visible slice of `line` — same horizontal window rule as
+/// [`visible_slice`] — but split into runs coloured by their highlight span.
+/// `line_start_byte` is the byte offset of the line within the document, so
+/// each grapheme's absolute byte can be looked up in `spans`.
+fn draw_line_highlighted(
+    stdout: &mut io::Stdout,
+    line: &str,
+    line_start_byte: usize,
+    spans: &[HlSpan],
+    col_offset: usize,
+    width: usize,
+) -> io::Result<()> {
+    let mut col = 0usize;
+    let mut byte_in_line = 0usize;
+    let mut current: Option<Color> = None;
+    for g in line.graphemes(true) {
+        let w = UnicodeWidthStr::width(g);
+        let g_start = byte_in_line;
+        byte_in_line += g.len();
+        if col + w <= col_offset {
+            col += w;
+            continue;
+        }
+        if col + w > col_offset + width {
+            break;
+        }
+        let color = style_at(spans, line_start_byte + g_start)
+            .map(color_for)
+            .unwrap_or(Color::Reset);
+        if current != Some(color) {
+            queue!(stdout, SetForegroundColor(color))?;
+            current = Some(color);
+        }
+        stdout.write_all(g.as_bytes())?;
+        col += w;
+    }
+    if current.is_some() {
+        queue!(stdout, SetForegroundColor(Color::Reset))?;
+    }
+    Ok(())
+}
+
 pub fn draw_editor(
     stdout: &mut io::Stdout,
     editor: &EditorModel,
     status_message: &str,
+    spans: &[HlSpan],
 ) -> io::Result<()> {
     let (cols, rows) = size()?;
     execute!(
@@ -51,8 +104,21 @@ pub fn draw_editor(
             break;
         }
         let line = editor.buffer.line_text(line_idx);
-        let visible = visible_slice(&line, editor.col_offset, cols as usize);
-        stdout.write_all(visible.as_bytes())?;
+        if spans.is_empty() {
+            // Fast path: no highlights available (worker not ready / disabled).
+            let visible = visible_slice(&line, editor.col_offset, cols as usize);
+            stdout.write_all(visible.as_bytes())?;
+        } else {
+            let line_start_byte = editor.buffer.line_to_byte(line_idx);
+            draw_line_highlighted(
+                stdout,
+                &line,
+                line_start_byte,
+                spans,
+                editor.col_offset,
+                cols as usize,
+            )?;
+        }
         stdout.write_all(b"\r\n")?;
     }
 
@@ -107,7 +173,33 @@ pub fn draw_editor(
 
 #[cfg(test)]
 mod tests {
-    use super::visible_slice;
+    use super::{style_at, visible_slice, HlSpan};
+
+    fn span(start: usize, end: usize, style: usize) -> HlSpan {
+        HlSpan {
+            start_byte: start,
+            end_byte: end,
+            style,
+        }
+    }
+
+    #[test]
+    fn style_at_finds_covering_span() {
+        // Two disjoint spans: bytes 0..2 style 10, bytes 5..8 style 16.
+        let spans = [span(0, 2, 10), span(5, 8, 16)];
+        assert_eq!(style_at(&spans, 0), Some(10));
+        assert_eq!(style_at(&spans, 1), Some(10));
+        assert_eq!(style_at(&spans, 2), None); // end is exclusive
+        assert_eq!(style_at(&spans, 4), None); // gap between spans
+        assert_eq!(style_at(&spans, 5), Some(16));
+        assert_eq!(style_at(&spans, 7), Some(16));
+        assert_eq!(style_at(&spans, 100), None); // past the end
+    }
+
+    #[test]
+    fn style_at_empty_is_none() {
+        assert_eq!(style_at(&[], 0), None);
+    }
 
     #[test]
     fn ascii_window() {

@@ -14,10 +14,6 @@
 //! the viewport at render time. True incremental parsing is a later migration
 //! to the raw `Query` API.
 
-// The public engine/worker API below is consumed by the application and `main`
-// layers in the following sprints; allow dead_code until it is fully wired.
-#![allow(dead_code)]
-
 use crossterm::style::Color;
 use ropey::Rope;
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};

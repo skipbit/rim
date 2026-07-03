@@ -181,15 +181,12 @@ async fn run() -> io::Result<()> {
             .editor_model
             .scroll_into_view(text_height, cols as usize);
 
-        // TEMP (Sprint 3): surface highlight state in the status line until the
-        // renderer consumes spans (Sprint 4). Confirms the worker is wired.
-        let debug_status = format!(
-            "{}  [hl:{} rev:{}]",
-            status_message,
-            syntax.spans().len(),
-            syntax.revision()
-        );
-        terminal_ui::draw_editor(&mut stdout, &editor_service.editor_model, &debug_status)?;
+        terminal_ui::draw_editor(
+            &mut stdout,
+            &editor_service.editor_model,
+            &status_message,
+            syntax.spans(),
+        )?;
 
         // A far-future default keeps the timer branch harmless while disabled by
         // its guard; `tick` is a copied Instant so the future borrows no state.
