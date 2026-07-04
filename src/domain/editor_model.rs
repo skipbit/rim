@@ -61,6 +61,12 @@ pub struct EditorModel {
     /// whole-file loads). The syntax layer compares it before/after handling
     /// input to detect that the text changed and a re-highlight is due.
     edit_revision: u64,
+    /// Jump list for go-to-definition and `Ctrl-o`/`Ctrl-i` navigation. Each
+    /// entry is `(filepath, cursor_y, cursor_x)`. `jump_index` is the current
+    /// position within the list; `== jumps.len()` means "at the live cursor,
+    /// not currently navigating history".
+    jumps: Vec<(Option<String>, usize, usize)>,
+    jump_index: usize,
 }
 
 impl EditorModel {
@@ -83,6 +89,8 @@ impl EditorModel {
             coalescing: false,
             last_change: None,
             edit_revision: 0,
+            jumps: Vec::new(),
+            jump_index: 0,
         }
     }
 
@@ -473,6 +481,108 @@ impl EditorModel {
         self.cursor_y = t.y.min(self.buffer.line_count().saturating_sub(1));
         self.cursor_x = t.x.min(self.buffer.line_char_len(self.cursor_y));
         self.coalescing = false;
+    }
+
+    /// Move the cursor to an absolute `(y, x)`, clamped to the buffer. Ends any
+    /// insert-coalescing run. Used by go-to-definition and the jump list. The
+    /// caller is responsible for calling `scroll_into_view` afterwards.
+    #[allow(dead_code)] // wired up in the go-to-definition milestone
+    pub fn goto(&mut self, y: usize, x: usize) {
+        let last = self.buffer.line_count().saturating_sub(1);
+        self.cursor_y = y.min(last);
+        self.cursor_x = x.min(self.buffer.line_char_len(self.cursor_y));
+        self.coalescing = false;
+    }
+
+    /// Apply a batch of non-overlapping char-range edits (from an LSP
+    /// `formatting`/`rename` response) as a **single undo step**. Each edit is
+    /// `(start_char, end_char, new_text)` with whole-buffer char offsets. The
+    /// edits are folded into one spanning [`Change`] over `[min_start, max_end)`
+    /// so `u` reverts the whole batch at once. Returns `false` if there was
+    /// nothing to apply.
+    #[allow(dead_code)] // wired up in the format/rename milestone
+    pub fn apply_lsp_edits(&mut self, mut edits: Vec<(usize, usize, String)>) -> bool {
+        edits.retain(|(s, e, t)| !(s == e && t.is_empty()));
+        if edits.is_empty() {
+            return false;
+        }
+        edits.sort_by_key(|(s, _, _)| *s);
+        let len = self.buffer.len_chars();
+        let min = edits.first().unwrap().0.min(len);
+        let max = edits
+            .iter()
+            .map(|(_, e, _)| *e)
+            .max()
+            .unwrap()
+            .min(len)
+            .max(min);
+        let removed = self.buffer.slice_text(min..max);
+        // Rebuild the [min, max) region with the edits applied in order.
+        let mut inserted = String::new();
+        let mut cur = min;
+        for (s, e, t) in &edits {
+            let s = (*s).clamp(min, max);
+            let e = (*e).clamp(s, max);
+            if cur < s {
+                inserted.push_str(&self.buffer.slice_text(cur..s));
+            }
+            inserted.push_str(t);
+            cur = e;
+        }
+        if cur < max {
+            inserted.push_str(&self.buffer.slice_text(cur..max));
+        }
+        let change = Change {
+            pos: min,
+            removed,
+            inserted,
+        };
+        let before = (self.cursor_y, self.cursor_x);
+        self.apply_change(&change);
+        // Best-effort cursor: clamp to the edited buffer.
+        let last = self.buffer.line_count().saturating_sub(1);
+        self.cursor_y = self.cursor_y.min(last);
+        self.cursor_x = self.cursor_x.min(self.buffer.line_char_len(self.cursor_y));
+        let after = (self.cursor_y, self.cursor_x);
+        self.commit(change, before, after);
+        true
+    }
+
+    /// Record the current location on the jump list (call right before an
+    /// absolute jump such as go-to-definition). Drops any forward history.
+    #[allow(dead_code)] // wired up in the go-to-definition milestone
+    pub fn push_jump(&mut self) {
+        self.jumps.truncate(self.jump_index);
+        self.jumps
+            .push((self.filepath.clone(), self.cursor_y, self.cursor_x));
+        self.jump_index = self.jumps.len();
+    }
+
+    /// Step back to the previous jump-list location (`Ctrl-o`). Returns the
+    /// `(filepath, y, x)` to restore, or `None` at the oldest entry. The live
+    /// position is captured on the first step back so `Ctrl-i` can return to it.
+    #[allow(dead_code)] // wired up in the go-to-definition milestone
+    pub fn jump_back(&mut self) -> Option<(Option<String>, usize, usize)> {
+        if self.jump_index == 0 {
+            return None;
+        }
+        if self.jump_index == self.jumps.len() {
+            self.jumps
+                .push((self.filepath.clone(), self.cursor_y, self.cursor_x));
+        }
+        self.jump_index -= 1;
+        Some(self.jumps[self.jump_index].clone())
+    }
+
+    /// Step forward to the next jump-list location (`Ctrl-i`). Returns the
+    /// `(filepath, y, x)` to restore, or `None` at the newest entry.
+    #[allow(dead_code)] // wired up in the go-to-definition milestone
+    pub fn jump_forward(&mut self) -> Option<(Option<String>, usize, usize)> {
+        if self.jump_index + 1 >= self.jumps.len() {
+            return None;
+        }
+        self.jump_index += 1;
+        Some(self.jumps[self.jump_index].clone())
     }
 
     /// Apply an operator over the range described by `motion`. Returns true when
@@ -1584,5 +1694,76 @@ mod tests {
         e.paste(false, 1); // P inserts before cursor
         assert_eq!(e.buffer.line_text(0), "aXbc");
         assert_eq!(e.cursor_x, 1);
+    }
+
+    // ---- MS4: absolute jump / LSP edits / jump list -------------------------
+
+    #[test]
+    fn test_goto_clamps_to_buffer() {
+        let mut e = model("abc\nde");
+        e.goto(1, 1);
+        assert_eq!((e.cursor_y, e.cursor_x), (1, 1));
+        // Past-end line and column clamp.
+        e.goto(99, 99);
+        assert_eq!((e.cursor_y, e.cursor_x), (1, 2));
+    }
+
+    #[test]
+    fn test_apply_lsp_edits_single_undo_step() {
+        let mut e = model("let x=1;");
+        let rev_before = e.edit_revision();
+        // Two disjoint edits: insert spaces around '='.
+        // "let x=1;" chars: l(0)e(1)t(2) (3)x(4)=(5)1(6);(7)
+        let applied = e.apply_lsp_edits(vec![
+            (5, 5, " ".to_string()), // before '='
+            (6, 6, " ".to_string()), // after '='
+        ]);
+        assert!(applied);
+        assert_eq!(e.buffer.line_text(0), "let x = 1;");
+        assert!(e.edit_revision() != rev_before);
+        // A single undo reverts the whole batch.
+        e.undo();
+        assert_eq!(e.buffer.line_text(0), "let x=1;");
+        e.redo();
+        assert_eq!(e.buffer.line_text(0), "let x = 1;");
+    }
+
+    #[test]
+    fn test_apply_lsp_edits_empty_is_noop() {
+        let mut e = model("abc");
+        assert!(!e.apply_lsp_edits(vec![]));
+        assert!(!e.apply_lsp_edits(vec![(1, 1, String::new())]));
+        assert_eq!(e.buffer.line_text(0), "abc");
+    }
+
+    #[test]
+    fn test_apply_lsp_edits_replacement() {
+        let mut e = model("foo bar");
+        // Replace "bar" (chars 4..7) with "baz".
+        assert!(e.apply_lsp_edits(vec![(4, 7, "baz".to_string())]));
+        assert_eq!(e.buffer.line_text(0), "foo baz");
+    }
+
+    #[test]
+    fn test_jumplist_back_and_forward() {
+        let mut e = model("l0\nl1\nl2\nl3");
+        e.set_filepath("a.rs".to_string());
+        // At (0,0). Jump to (2,0) recording the origin.
+        e.push_jump();
+        e.goto(2, 0);
+        // Jump again to (3,1).
+        e.push_jump();
+        e.goto(3, 1);
+        // Ctrl-o walks back through recorded positions.
+        let back1 = e.jump_back();
+        assert_eq!(back1, Some((Some("a.rs".to_string()), 2, 0)));
+        e.goto(back1.unwrap().1, 0);
+        let back2 = e.jump_back();
+        assert_eq!(back2, Some((Some("a.rs".to_string()), 0, 0)));
+        e.goto(0, 0);
+        assert_eq!(e.jump_back(), None);
+        // Ctrl-i walks forward again.
+        let fwd = e.jump_forward();
+        assert_eq!(fwd, Some((Some("a.rs".to_string()), 2, 0)));
     }
 }

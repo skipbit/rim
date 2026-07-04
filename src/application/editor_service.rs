@@ -3,7 +3,10 @@ use crate::infrastructure::file_io::FileIO;
 use crossterm::event::KeyCode;
 use std::io::{self, Error, ErrorKind};
 
-use crate::application::commands::{EditCommand, EditorCommand, QuitCommand, WriteCommand};
+use crate::application::commands::{
+    EditCommand, EditorCommand, FormatCommand, QuitCommand, RenameCommand, WriteCommand,
+};
+use crate::application::lsp::LspRequest;
 
 #[derive(Debug)]
 pub enum HandleCommandResult {
@@ -14,6 +17,9 @@ pub enum HandleCommandResult {
 pub struct EditorService<T: FileIO> {
     pub editor_model: EditorModel,
     file_io: T,
+    /// An LSP feature request recorded by a synchronous input handler, to be
+    /// picked up and dispatched by the async main loop after the keypress.
+    pending_lsp: Option<LspRequest>,
 }
 
 impl<T: FileIO> EditorService<T> {
@@ -21,7 +27,21 @@ impl<T: FileIO> EditorService<T> {
         Self {
             editor_model: EditorModel::new(),
             file_io,
+            pending_lsp: None,
         }
+    }
+
+    /// Record an LSP feature request for the async loop to dispatch.
+    #[allow(dead_code)] // wired up in the LSP feature sprints
+    pub fn request_lsp(&mut self, req: LspRequest) {
+        self.pending_lsp = Some(req);
+    }
+
+    /// Take the pending LSP request, if any (drained once per input cycle by
+    /// the async main loop).
+    #[allow(dead_code)] // wired up in the LSP milestone (main loop)
+    pub fn take_pending_lsp(&mut self) -> Option<LspRequest> {
+        self.pending_lsp.take()
     }
 
     pub fn open_file(&mut self, filepath: &str) -> io::Result<()> {
@@ -128,7 +148,9 @@ impl<T: FileIO> EditorService<T> {
         let commands: Vec<Box<dyn EditorCommand<T>>> = vec![
             Box::new(WriteCommand::new(arg.clone())),
             Box::new(QuitCommand),
-            Box::new(EditCommand::new(arg.unwrap_or_default())),
+            Box::new(EditCommand::new(arg.clone().unwrap_or_default())),
+            Box::new(FormatCommand),
+            Box::new(RenameCommand::new(arg.unwrap_or_default())),
         ];
 
         for cmd in commands {

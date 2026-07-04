@@ -1,4 +1,5 @@
 use crate::application::editor_service::EditorService;
+use crate::application::lsp::LspRequest;
 use crate::domain::editor_model::{EditorMode, Operator};
 use crate::domain::motion::Motion;
 use crate::domain::text_object::TextObject;
@@ -142,6 +143,13 @@ impl NormalMode {
                 }
                 KeyCode::Char('E') => {
                     self.run_motion(svc, Motion::WordPrevEnd { big: true }, status)
+                }
+                // `gd`: go to definition. Record the jump origin first.
+                KeyCode::Char('d') => {
+                    svc.editor_model.push_jump();
+                    let (y, x) = (svc.editor_model.cursor_y, svc.editor_model.cursor_x);
+                    svc.request_lsp(LspRequest::Definition { y, x });
+                    status.clear();
                 }
                 _ => {
                     self.reset();
@@ -291,6 +299,23 @@ impl NormalMode {
                 status.clear();
             }
 
+            // Jump list: Ctrl-o back, Ctrl-i forward (guarded before the bare
+            // `o`/`i` insert-entry arms below).
+            KeyCode::Char('o') if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some((path, y, x)) = svc.editor_model.jump_back() {
+                    jump_to(svc, path, y, x);
+                }
+                self.reset();
+                status.clear();
+            }
+            KeyCode::Char('i') if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some((path, y, x)) = svc.editor_model.jump_forward() {
+                    jump_to(svc, path, y, x);
+                }
+                self.reset();
+                status.clear();
+            }
+
             // Operator shortcuts (no pending operator here).
             KeyCode::Char('D') => {
                 svc.editor_model
@@ -387,6 +412,14 @@ impl NormalMode {
                 status.clear();
             }
 
+            // LSP: hover for the symbol under the cursor.
+            KeyCode::Char('K') => {
+                let (y, x) = (svc.editor_model.cursor_y, svc.editor_model.cursor_x);
+                svc.request_lsp(LspRequest::Hover { y, x });
+                self.reset();
+                status.clear();
+            }
+
             // Mode switches.
             KeyCode::Char('/') => {
                 svc.set_mode(EditorMode::Search);
@@ -417,6 +450,19 @@ impl NormalMode {
 
         NormalResult::Continue
     }
+}
+
+/// Move to a jump-list location, opening its file first if it differs from the
+/// current buffer. (Reloading the same file would clear undo history, so we
+/// only open when the path actually changes; the main loop notices the file
+/// switch and re-syncs the LSP / re-highlights.)
+fn jump_to<T: FileIO>(svc: &mut EditorService<T>, path: Option<String>, y: usize, x: usize) {
+    if let Some(p) = path {
+        if Some(&p) != svc.editor_model.get_filepath() {
+            let _ = svc.open_file(&p);
+        }
+    }
+    svc.editor_model.goto(y, x);
 }
 
 #[cfg(test)]
