@@ -6,7 +6,9 @@ This document outlines the current features and keybindings of the `rim` termina
 coordinates, wide-character-aware display columns), with invertible-transaction
 undo and viewport scrolling. It runs on an asynchronous (tokio) event loop, so
 background work never blocks input, and it renders **tree-sitter** syntax
-highlighting for the visible window.
+highlighting for the visible window. A line-number gutter runs down the left
+edge, and an embedded **LSP client** (rust-analyzer) provides diagnostics,
+hover, go-to-definition, formatting, rename, and completion.
 
 ## Syntax Highlighting
 
@@ -21,6 +23,36 @@ highlighting for the visible window.
 -   Only the visible window is coloured; the previous plain rendering is used as
     a fast path until the first highlights arrive (or if the grammar fails to
     load, in which case the editor keeps working without colour).
+
+## Language Intelligence (LSP)
+
+`rim` embeds a Language Server Protocol client. For Rust files it launches
+[`rust-analyzer`](https://rust-analyzer.github.io/) (found on `PATH`) the first
+time a `.rs` file is opened; if the server is not installed the editor keeps
+working without language features.
+
+-   **Diagnostics**: errors and warnings are shown as coloured underlines, with
+    a severity sign (`E`/`W`) in the gutter and the message for the diagnostic
+    under the cursor on the status line. They update as you type (debounced) and
+    clear when fixed.
+-   **Hover** (`K`): show the type / documentation for the symbol under the
+    cursor in a popup. Any key dismisses it.
+-   **Go-to-definition** (`gd`): jump to a symbol's definition, in the same file
+    or another (which is opened automatically). Use `Ctrl-o` / `Ctrl-i` to jump
+    back / forward through the jump list.
+-   **Format** (`:format` / `:fmt`): reformat the whole document; a single `u`
+    reverts it.
+-   **Rename** (`:rename <new>`): rename the symbol under the cursor. Edits in
+    the current file are applied as one undo step; edits in other files are
+    reported but not applied (single-buffer editor).
+-   **Completion** (Insert mode, `Ctrl-n` or `Ctrl-Space`): open a completion
+    menu that filters as you type. `Ctrl-n` / `Ctrl-p` (or `↓` / `↑`) move the
+    selection, `Enter` / `Tab` accept, `Esc` dismisses.
+
+Requests run on background tasks, so the editor never blocks on the server. The
+whole document is synced on each debounced edit; the line/column mapping honours
+the position encoding negotiated with the server (UTF-8 preferred, UTF-16
+fallback), so multibyte text stays aligned.
 
 ## Modes
 
@@ -75,6 +107,8 @@ leading **count** (e.g. `3w`, `2dd`, `d2w`).
 -   `Ctrl-r`: Redo last undone change
 -   `.`: Repeat the last change *(currently repeats simple single-key edits; repeating a full operator+motion command is planned)*
 -   `/`: Enter Search Mode; `n` / `N`: next / previous match
+-   `gd`: Go to definition (LSP); `K`: Hover (LSP)
+-   `Ctrl-o` / `Ctrl-i`: Jump back / forward through the jump list
 -   `:`: Enter Command Mode
 -   `q`: Quit the editor
 
@@ -89,6 +123,8 @@ In Insert Mode, you can type and modify the content of the file.
 -   `Enter`: Inserts a new line
 -   `Backspace`: Deletes the character before the cursor
 -   Arrow Keys: Move cursor (Left, Down, Up, Right)
+-   `Ctrl-n` / `Ctrl-Space`: Open LSP completion (then `Ctrl-n` / `Ctrl-p` to
+    select, `Enter` / `Tab` to accept, `Esc` to dismiss)
 
 ### 3. Command Mode
 
@@ -112,6 +148,10 @@ In Command Mode, you can execute various editor commands by typing them at the p
 -   `:e` or `:edit <filename>`
     -   Opens the specified file in the editor.
     -   Replaces the current buffer with the content of the new file.
+-   `:format` or `:fmt`
+    -   Reformats the whole document via the language server (one undo step).
+-   `:rename <new>`
+    -   Renames the symbol under the cursor via the language server.
 
 ### 4. Search Mode
 

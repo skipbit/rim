@@ -146,9 +146,54 @@ impl TextBuffer {
     }
 
     /// Byte index of char index `char_idx`.
-    #[allow(dead_code)] // wired up in the highlight-rendering milestone
     pub fn char_to_byte(&self, char_idx: usize) -> usize {
         self.rope.char_to_byte(char_idx)
+    }
+
+    // ---- UTF-16 / line coordinates (for LSP position mapping) ---------------
+    //
+    // LSP `Position.character` counts UTF-16 code units by default, or UTF-8
+    // bytes within the line when the `utf-8` position encoding is negotiated.
+    // The cursor layer is char-indexed, so these convert a char column within a
+    // line to/from a UTF-16 code-unit column. The UTF-8 path reuses
+    // `char_to_byte`/`line_to_byte` above. All of these delegate to ropey.
+
+    /// Total number of rope lines. Under the trailing-newline invariant this
+    /// includes the phantom empty line after the final `'\n'`, so it is
+    /// `line_count() + 1` for a non-empty buffer. Used to clamp incoming LSP
+    /// line numbers (which may address that phantom line).
+    #[allow(dead_code)] // wired up in the LSP milestone
+    pub fn len_lines(&self) -> usize {
+        self.rope.len_lines()
+    }
+
+    /// Char index of byte index `byte_idx`.
+    #[allow(dead_code)] // wired up in the LSP milestone
+    pub fn byte_to_char(&self, byte_idx: usize) -> usize {
+        self.rope.byte_to_char(byte_idx)
+    }
+
+    /// UTF-16 code-unit column of char column `x` within logical line `y`
+    /// (newline excluded). `x` is clamped to the line length.
+    #[allow(dead_code)] // wired up in the LSP milestone
+    pub fn line_char_to_utf16(&self, y: usize, x: usize) -> usize {
+        if y >= self.rope.len_lines() {
+            return 0;
+        }
+        let x = x.min(self.line_char_len(y));
+        self.rope.line(y).char_to_utf16_cu(x)
+    }
+
+    /// Char column within logical line `y` for a UTF-16 code-unit column `u`
+    /// (newline excluded). Clamps to the line length.
+    #[allow(dead_code)] // wired up in the LSP milestone
+    pub fn line_utf16_to_char(&self, y: usize, u: usize) -> usize {
+        if y >= self.rope.len_lines() {
+            return 0;
+        }
+        let line = self.rope.line(y);
+        let u = u.min(line.len_utf16_cu());
+        line.utf16_cu_to_char(u).min(self.line_char_len(y))
     }
 
     /// Whole-buffer char index of cursor position `(y, x)`.
@@ -361,6 +406,48 @@ mod tests {
         assert_eq!(buf.char_to_byte(1), 3);
         // char 3 is 'x' on line 1 -> byte 7.
         assert_eq!(buf.char_to_byte(3), 7);
+    }
+
+    #[test]
+    fn utf16_column_conversion_bmp_and_astral() {
+        let mut buf = TextBuffer::new();
+        // "aé😀b": 'a'=1u16, 'é'=1u16, '😀'=2u16 (surrogate pair), 'b'=1u16.
+        buf.set_content("aé😀b");
+        // char cols -> utf16 cols
+        assert_eq!(buf.line_char_to_utf16(0, 0), 0);
+        assert_eq!(buf.line_char_to_utf16(0, 1), 1); // after 'a'
+        assert_eq!(buf.line_char_to_utf16(0, 2), 2); // after 'é'
+        assert_eq!(buf.line_char_to_utf16(0, 3), 4); // after '😀' (surrogate pair)
+        assert_eq!(buf.line_char_to_utf16(0, 4), 5); // after 'b'
+                                                     // inverse round-trips
+        for x in 0..=4 {
+            let u = buf.line_char_to_utf16(0, x);
+            assert_eq!(buf.line_utf16_to_char(0, u), x, "char col {x}");
+        }
+    }
+
+    #[test]
+    fn utf16_conversion_clamps_out_of_range() {
+        let mut buf = TextBuffer::new();
+        buf.set_content("ab\ncd");
+        // x past end of line clamps to line length.
+        assert_eq!(buf.line_char_to_utf16(0, 99), 2);
+        // utf16 col past end clamps to line char length.
+        assert_eq!(buf.line_utf16_to_char(0, 99), 2);
+        // out-of-range line index is harmless.
+        assert_eq!(buf.line_char_to_utf16(99, 0), 0);
+        assert_eq!(buf.line_utf16_to_char(99, 0), 0);
+    }
+
+    #[test]
+    fn len_lines_includes_phantom_trailing_line() {
+        let mut buf = TextBuffer::new();
+        buf.set_content("ab\ncd");
+        // 2 logical lines + 1 phantom line after the invariant '\n'.
+        assert_eq!(buf.line_count(), 2);
+        assert_eq!(buf.len_lines(), 3);
+        // byte_to_char round-trips against char_to_byte.
+        assert_eq!(buf.byte_to_char(buf.char_to_byte(4)), 4);
     }
 
     #[test]

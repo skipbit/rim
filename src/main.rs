@@ -3,6 +3,7 @@ mod domain;
 mod infrastructure;
 
 use application::editor_service::{EditorService, HandleCommandResult};
+use application::lsp::{ApplyOutcome, Lsp, LspRequest};
 use application::normal_mode::{NormalMode, NormalResult};
 use application::syntax::Syntax;
 use domain::editor_model::EditorMode;
@@ -10,7 +11,7 @@ use infrastructure::file_io::LocalFileIO;
 use infrastructure::terminal_ui;
 
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent},
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{
         disable_raw_mode, enable_raw_mode, size, EnterAlternateScreen, LeaveAlternateScreen,
@@ -51,6 +52,37 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
+/// Plain insert-mode key handling (no completion popup active).
+fn insert_default_key(
+    event: KeyEvent,
+    editor_service: &mut EditorService<LocalFileIO>,
+    status_message: &mut String,
+) {
+    match event.code {
+        KeyCode::Esc => {
+            editor_service.set_mode(EditorMode::Normal);
+            status_message.clear();
+        }
+        KeyCode::Char(c) => {
+            editor_service.insert_char(c);
+            status_message.clear();
+        }
+        KeyCode::Enter => {
+            editor_service.editor_model.insert_newline();
+            status_message.clear();
+        }
+        KeyCode::Backspace => {
+            editor_service.delete_char();
+            status_message.clear();
+        }
+        KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
+            editor_service.move_cursor(event.code);
+            status_message.clear();
+        }
+        _ => {}
+    }
+}
+
 /// Dispatch one key event to the editor. Returns `true` if the editor should
 /// quit. Pure synchronous CPU work — it never blocks the async runtime.
 fn handle_key(
@@ -58,34 +90,54 @@ fn handle_key(
     editor_service: &mut EditorService<LocalFileIO>,
     normal_mode: &mut NormalMode,
     status_message: &mut String,
+    lsp: &mut Lsp,
 ) -> bool {
+    let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
     match editor_service.editor_model.mode {
         EditorMode::Normal => match normal_mode.feed(editor_service, &event, status_message) {
             NormalResult::Quit => return true,
             NormalResult::Continue => {}
         },
-        EditorMode::Insert => match event.code {
-            KeyCode::Esc => {
-                editor_service.set_mode(EditorMode::Normal);
-                status_message.clear();
+        EditorMode::Insert if lsp.completion_active() => match event.code {
+            KeyCode::Esc => lsp.close_completion(),
+            KeyCode::Char('n') if ctrl => lsp.completion_move(1),
+            KeyCode::Char('p') if ctrl => lsp.completion_move(-1),
+            KeyCode::Down => lsp.completion_move(1),
+            KeyCode::Up => lsp.completion_move(-1),
+            KeyCode::Enter | KeyCode::Tab => {
+                lsp.completion_accept(editor_service);
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c) if !ctrl && (c.is_alphanumeric() || c == '_') => {
                 editor_service.insert_char(c);
-                status_message.clear();
-            }
-            KeyCode::Enter => {
-                editor_service.editor_model.insert_newline();
-                status_message.clear();
+                lsp.completion_refilter(&editor_service.editor_model);
             }
             KeyCode::Backspace => {
                 editor_service.delete_char();
-                status_message.clear();
+                lsp.completion_refilter(&editor_service.editor_model);
             }
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
-                editor_service.move_cursor(event.code);
-                status_message.clear();
+            // Any other key dismisses the popup and is handled normally.
+            _ => {
+                lsp.close_completion();
+                insert_default_key(event, editor_service, status_message);
             }
-            _ => {}
+        },
+        EditorMode::Insert => match event.code {
+            // Trigger completion: Ctrl-n or Ctrl-Space.
+            KeyCode::Char('n') if ctrl => {
+                let (y, x) = (
+                    editor_service.editor_model.cursor_y,
+                    editor_service.editor_model.cursor_x,
+                );
+                editor_service.request_lsp(LspRequest::Completion { y, x });
+            }
+            KeyCode::Char(' ') if ctrl => {
+                let (y, x) = (
+                    editor_service.editor_model.cursor_y,
+                    editor_service.editor_model.cursor_x,
+                );
+                editor_service.request_lsp(LspRequest::Completion { y, x });
+            }
+            _ => insert_default_key(event, editor_service, status_message),
         },
         EditorMode::Command => match event.code {
             KeyCode::Esc => {
@@ -166,6 +218,13 @@ async fn run() -> io::Result<()> {
         );
     }
 
+    // Background LSP client. Server->client messages (and our request results)
+    // arrive on `lsp_rx`, a fourth branch of the select! below. The language
+    // server is spawned lazily on the first `.rs` file open.
+    let (lsp_tx, mut lsp_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut lsp = Lsp::new(lsp_tx);
+    lsp.on_open(&editor_service.editor_model);
+
     // Async terminal input via crossterm's EventStream (the "event-stream"
     // feature); awaiting it never blocks the runtime.
     let mut reader = EventStream::new();
@@ -174,18 +233,38 @@ async fn run() -> io::Result<()> {
 
     let mut stdout = io::stdout();
     loop {
-        // Keep the cursor within the visible text area before rendering.
+        // Keep the cursor within the visible text area before rendering. The
+        // line-number gutter narrows the horizontal text area.
         let (cols, rows) = size()?;
         let text_height = (rows as usize).saturating_sub(2);
+        let gutter = terminal_ui::gutter_width(editor_service.editor_model.buffer.line_count());
+        let text_width = (cols as usize).saturating_sub(gutter);
         editor_service
             .editor_model
-            .scroll_into_view(text_height, cols as usize);
+            .scroll_into_view(text_height, text_width);
+
+        // Project LSP diagnostics onto the buffer for rendering, and the
+        // message of the diagnostic under the cursor (or a count summary) for
+        // the idle status line.
+        let model = &editor_service.editor_model;
+        let diagnostics = lsp.line_diagnostics(&model.buffer);
+        let diagnostic_msg = lsp
+            .diagnostic_at(&model.buffer, model.cursor_y, model.cursor_x)
+            .or_else(|| lsp.progress_message())
+            .unwrap_or_else(|| lsp.diagnostic_summary());
+        let completion = lsp.completion_view();
 
         terminal_ui::draw_editor(
             &mut stdout,
             &editor_service.editor_model,
             &status_message,
             syntax.spans(),
+            &diagnostics,
+            &diagnostic_msg,
+            lsp.hover_lines(),
+            completion
+                .as_ref()
+                .map(|(items, sel)| (items.as_slice(), *sel)),
         )?;
 
         // A far-future default keeps the timer branch harmless while disabled by
@@ -195,15 +274,37 @@ async fn run() -> io::Result<()> {
             maybe_event = reader.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) => {
+                        // Any keypress dismisses the hover popup (completion has
+                        // its own lifecycle).
+                        lsp.clear_transient();
                         let before = editor_service.editor_model.edit_revision();
-                        if handle_key(key, &mut editor_service, &mut normal_mode, &mut status_message) {
+                        let before_path = editor_service.editor_model.filepath.clone();
+                        if handle_key(key, &mut editor_service, &mut normal_mode, &mut status_message, &mut lsp) {
                             break;
                         }
-                        // If the text changed, (re-)arm the debounce with the newest snapshot.
                         let after = editor_service.editor_model.edit_revision();
-                        if after != before {
+                        let after_path = editor_service.editor_model.filepath.clone();
+                        if after_path != before_path {
+                            // File switched (:e / cross-file gd): re-open in the
+                            // LSP and re-highlight the whole new buffer. Handled
+                            // before the didChange path so the `set_content`
+                            // revision bump is subsumed into the open, not sent
+                            // as a spurious change against the new document.
+                            lsp.on_open(&editor_service.editor_model);
+                            if editor_service.editor_model.buffer.line_count() > 0 {
+                                syntax.request_now(after, editor_service.editor_model.buffer.snapshot());
+                            }
+                            deadline = None;
+                        } else if after != before {
+                            // Text changed: (re-)arm the shared edit debounce for
+                            // both re-highlight and didChange.
                             syntax.note_change(after, editor_service.editor_model.buffer.snapshot());
+                            lsp.note_change();
                             deadline = Some(Instant::now() + HIGHLIGHT_DEBOUNCE);
+                        }
+                        // Fire any LSP feature request the keypress recorded.
+                        if let Some(req) = editor_service.take_pending_lsp() {
+                            lsp.dispatch_request(req, &editor_service.editor_model);
                         }
                     }
                     Some(Ok(_)) => {}   // resize/mouse/paste: just re-render
@@ -214,11 +315,41 @@ async fn run() -> io::Result<()> {
             Some(highlights) = hl_rx.recv() => {
                 syntax.apply(highlights);
             }
+            Some(event) = lsp_rx.recv() => {
+                match lsp.apply(event, &mut editor_service, &mut status_message) {
+                    // Cross-file go-to-definition: re-open in the LSP and
+                    // re-highlight the whole new buffer.
+                    ApplyOutcome::FileSwitched => {
+                        lsp.on_open(&editor_service.editor_model);
+                        if editor_service.editor_model.buffer.line_count() > 0 {
+                            syntax.request_now(
+                                editor_service.editor_model.edit_revision(),
+                                editor_service.editor_model.buffer.snapshot(),
+                            );
+                        }
+                    }
+                    // Format/rename edited the buffer: re-highlight now and arm
+                    // the debounced didChange.
+                    ApplyOutcome::Edited => {
+                        syntax.request_now(
+                            editor_service.editor_model.edit_revision(),
+                            editor_service.editor_model.buffer.snapshot(),
+                        );
+                        deadline = Some(Instant::now() + HIGHLIGHT_DEBOUNCE);
+                    }
+                    ApplyOutcome::Nothing => {}
+                }
+            }
             _ = tokio::time::sleep_until(tick), if deadline.is_some() => {
                 syntax.dispatch();
+                lsp.dispatch_change(&editor_service.editor_model);
                 deadline = None;
             }
         }
     }
+
+    // Best-effort graceful LSP shutdown (timeout-guarded) before the terminal
+    // is restored by `main`.
+    lsp.shutdown().await;
     Ok(())
 }
